@@ -7,6 +7,7 @@ import Transfer from '@/pages/Transfer';
 import Maintenance from '@/pages/Maintenance';
 import Inventory from '@/pages/Inventory';
 import Reports from '@/pages/Reports';
+import Scrap from '@/pages/Scrap';
 
 export const router = createBrowserRouter([
   {
@@ -70,6 +71,14 @@ export const router = createBrowserRouter([
     element: (
       <Layout>
         <Reports />
+      </Layout>
+    ),
+  },
+  {
+    path: '/scrap',
+    element: (
+      <Layout>
+        <Scrap />
       </Layout>
     ),
   },

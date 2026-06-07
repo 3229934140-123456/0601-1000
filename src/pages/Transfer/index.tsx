@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   ArrowLeftRight,
   Plus,
@@ -15,28 +15,55 @@ import {
   ChevronRight,
   CheckCircle,
   XCircle,
+  Package,
+  MapPin,
+  Download,
 } from 'lucide-react';
 import { useAssetStore } from '@/store/useAssetStore';
-import { formatDate } from '@/utils/format';
+import { formatDate, formatCurrency } from '@/utils/format';
 import { departments } from '@/data/departments';
 import { users } from '@/data/users';
+import { getDepartmentName, getUserName } from '@/data/users';
+import { exportTransferOrders } from '@/utils/export';
+import { Asset } from '@/types';
 
 export default function Transfer() {
   const [activeTab, setActiveTab] = useState<'pending' | 'approved' | 'completed'>('pending');
   const [showApplyModal, setShowApplyModal] = useState(false);
+  const [showAssetSelector, setShowAssetSelector] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
 
   const transferOrders = useAssetStore((state) => state.transferOrders);
+  const assets = useAssetStore((state) => state.assets);
   const updateTransferOrder = useAssetStore((state) => state.updateTransferOrder);
   const addTransferOrder = useAssetStore((state) => state.addTransferOrder);
 
   const [applyForm, setApplyForm] = useState({
-    assetName: '',
     assetId: '',
+    assetName: '',
+    assetNo: '',
+    fromDeptId: '',
+    fromDeptName: '',
     toDeptId: '',
     reason: '',
   });
+
+  const [assetSearch, setAssetSearch] = useState('');
+
+  const availableAssets = useMemo(() => {
+    return assets.filter((a) => a.status === 'idle' || a.status === 'in_use');
+  }, [assets]);
+
+  const filteredAssets = useMemo(() => {
+    if (!assetSearch) return availableAssets;
+    const keyword = assetSearch.toLowerCase();
+    return availableAssets.filter(
+      (a) =>
+        a.name.toLowerCase().includes(keyword) ||
+        a.assetNo.toLowerCase().includes(keyword)
+    );
+  }, [availableAssets, assetSearch]);
 
   const filteredOrders = transferOrders.filter((order) => {
     if (activeTab === 'pending') return order.status === 'pending';
@@ -70,7 +97,7 @@ export default function Transfer() {
 
   const handleReject = (id: string) => {
     const reason = prompt('请输入拒绝原因：');
-    if (reason !== null) {
+    if (reason !== null && reason.trim() !== '') {
       updateTransferOrder(id, { status: 'rejected', approver: '张明', approveDate: new Date().toISOString().split('T')[0], approveRemark: reason });
     }
   };
@@ -88,27 +115,55 @@ export default function Transfer() {
     total: transferOrders.length,
   };
 
+  const selectAsset = (asset: Asset) => {
+    const deptName = getDepartmentName(asset.departmentId);
+    setApplyForm({
+      ...applyForm,
+      assetId: asset.id,
+      assetName: asset.name,
+      assetNo: asset.assetNo,
+      fromDeptId: asset.departmentId,
+      fromDeptName: deptName,
+    });
+    setShowAssetSelector(false);
+    setAssetSearch('');
+  };
+
   const submitApply = () => {
-    if (applyForm.assetName && applyForm.toDeptId) {
-      const toDept = departments.find((d) => d.id === applyForm.toDeptId);
-      addTransferOrder({
-        assetId: applyForm.assetId,
-        assetName: applyForm.assetName,
-        assetNo: 'BJT-IT-2024-0001',
-        fromDeptId: 'dept_001',
-        fromDeptName: '行政部',
-        toDeptId: applyForm.toDeptId,
-        toDeptName: toDept?.name || '',
-        status: 'pending',
-        reason: applyForm.reason,
-        applicant: '张明',
-        applicantId: 'user_001',
-        applyDate: new Date().toISOString().split('T')[0],
-      });
-      setShowApplyModal(false);
-      setApplyForm({ assetName: '', assetId: '', toDeptId: '', reason: '' });
-      alert('调拨申请提交成功！');
+    if (!applyForm.assetId || !applyForm.toDeptId || !applyForm.reason) {
+      alert('请填写完整的调拨信息');
+      return;
     }
+    const toDept = departments.find((d) => d.id === applyForm.toDeptId);
+    addTransferOrder({
+      assetId: applyForm.assetId,
+      assetName: applyForm.assetName,
+      assetNo: applyForm.assetNo,
+      fromDeptId: applyForm.fromDeptId,
+      fromDeptName: applyForm.fromDeptName,
+      toDeptId: applyForm.toDeptId,
+      toDeptName: toDept?.name || '',
+      status: 'pending',
+      reason: applyForm.reason,
+      applicant: '张明',
+      applicantId: 'user_001',
+      applyDate: new Date().toISOString().split('T')[0],
+    });
+    setShowApplyModal(false);
+    setApplyForm({
+      assetId: '',
+      assetName: '',
+      assetNo: '',
+      fromDeptId: '',
+      fromDeptName: '',
+      toDeptId: '',
+      reason: '',
+    });
+    alert('调拨申请提交成功！');
+  };
+
+  const handleExport = () => {
+    exportTransferOrders(transferOrders, `调拨记录_${new Date().toISOString().split('T')[0]}.csv`);
   };
 
   return (
@@ -118,10 +173,16 @@ export default function Transfer() {
           <h1 className="text-2xl font-bold text-slate-900">调拨申请</h1>
           <p className="text-sm text-slate-500 mt-1">管理跨部门资产调拨流程</p>
         </div>
-        <button className="btn-primary" onClick={() => setShowApplyModal(true)}>
-          <Plus className="w-4 h-4 mr-2" />
-          发起调拨
-        </button>
+        <div className="flex items-center gap-3">
+          <button className="btn-secondary" onClick={handleExport}>
+            <Download className="w-4 h-4 mr-2" />
+            导出记录
+          </button>
+          <button className="btn-primary" onClick={() => setShowApplyModal(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            发起调拨
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-4 gap-4">
@@ -360,7 +421,7 @@ export default function Transfer() {
       {showApplyModal && (
         <div className="modal-overlay" onClick={() => setShowApplyModal(false)}>
           <div
-            className="modal-content"
+            className="modal-content max-w-lg"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-6 border-b border-slate-200">
@@ -369,16 +430,54 @@ export default function Transfer() {
             <div className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
-                  资产名称 <span className="text-danger-500">*</span>
+                  选择资产 <span className="text-danger-500">*</span>
                 </label>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder="请输入或选择资产"
-                  value={applyForm.assetName}
-                  onChange={(e) => setApplyForm({ ...applyForm, assetName: e.target.value })}
-                />
+                <div
+                  className="relative">
+                  {applyForm.assetId ? (
+                    <div className="flex items-center justify-between p-3 border border-slate-200 rounded-lg bg-slate-50">
+                      <div className="flex items-center gap-3">
+                        <Package className="w-5 h-5 text-primary-500" />
+                        <div>
+                          <p className="text-sm font-medium text-slate-900">{applyForm.assetName}</p>
+                          <p className="text-xs text-slate-500 font-mono">{applyForm.assetNo}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-xs text-primary-600 hover:underline"
+                        onClick={() => setShowAssetSelector(true)}
+                      >
+                        重新选择
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="w-full p-4 border-2 border-dashed border-slate-300 rounded-lg text-center hover:border-primary-400 transition-colors"
+                      onClick={() => setShowAssetSelector(true)}
+                    >
+                      <Plus className="w-5 h-5 text-slate-400 mx-auto mb-1" />
+                      <span className="text-sm text-slate-600">点击选择资产</span>
+                    </button>
+                  )}
+                </div>
               </div>
+
+              {applyForm.fromDeptName && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    调出部门
+                  </label>
+                  <div className="p-3 bg-slate-50 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="w-4 h-4 text-slate-400" />
+                      <span className="text-sm text-slate-700">{applyForm.fromDeptName}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
                   调入部门 <span className="text-danger-500">*</span>
@@ -417,6 +516,82 @@ export default function Transfer() {
                 <Plus className="w-4 h-4 mr-2" />
                 提交申请
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAssetSelector && (
+        <div className="modal-overlay" onClick={() => setShowAssetSelector(false)}>
+          <div
+            className="modal-content max-w-2xl max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-slate-900">选择资产</h2>
+              <button
+                className="p-2 hover:bg-slate-100 rounded-lg"
+                onClick={() => setShowAssetSelector(false)}
+              >
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            <div className="p-4 border-b border-slate-100">
+              <div className="relative">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="搜索资产名称、编号..."
+                  className="input pl-9 w-full"
+                  value={assetSearch}
+                  onChange={(e) => setAssetSearch(e.target.value)}
+                  autoFocus
+                />
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {filteredAssets.length > 0 ? (
+                <div className="divide-y divide-slate-100">
+                  {filteredAssets.map((asset) => (
+                  <div
+                    key={asset.id}
+                    className="p-4 hover:bg-slate-50 cursor-pointer transition-colors"
+                    onClick={() => selectAsset(asset)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center">
+                          <Package className="w-5 h-5 text-primary-600" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-slate-900">{asset.name}</p>
+                          <p className="text-xs text-slate-500 font-mono">{asset.assetNo}</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm text-slate-700">{formatCurrency(asset.value)}</p>
+                        <p className="text-xs text-slate-500">
+                          {getDepartmentName(asset.departmentId)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4 mt-2 text-xs text-slate-500">
+                      <span className="inline-flex items-center gap-1">
+                        <MapPin className="w-3 h-3" />
+                        {asset.location}
+                      </span>
+                      <span>
+                        {asset.userId ? `使用人：${getUserName(asset.userId)}` : '未分配'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-12 text-center text-slate-500">
+                暂无可用资产
+              </div>
+            )}
             </div>
           </div>
         </div>

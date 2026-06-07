@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   Plus,
   Upload,
@@ -13,17 +13,39 @@ import {
   DollarSign,
   Building2,
   MapPin,
+  FileText,
+  X,
+  FileImage,
 } from 'lucide-react';
 import { useAssetStore } from '@/store/useAssetStore';
 import { categoryMap, AssetCategory } from '@/types';
-import { formatCurrency, formatDate } from '@/utils/format';
+import { formatCurrency, formatDate, formatDateTime, formatFileSize } from '@/utils/format';
 import { departments } from '@/data/departments';
+import { PurchaseVoucher } from '@/types';
+
+interface ImportRecord {
+  name: string;
+  category: string;
+  value: number;
+  purchaseDate: string;
+  departmentId: string;
+  location: string;
+  description: string;
+  warrantyPeriod: number;
+  usefulLife: number;
+  _status: string;
+  _error: string;
+}
 
 export default function Warehousing() {
   const [activeTab, setActiveTab] = useState<'single' | 'batch'>('single');
   const addAsset = useAssetStore((state) => state.addAsset);
+  const bulkAddAssets = useAssetStore((state) => state.bulkAddAssets);
+  const addVoucher = useAssetStore((state) => state.addVoucher);
   const assets = useAssetStore((state) => state.assets);
-  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const voucherInputRef = useRef<HTMLInputElement>(null);
+
   const [formData, setFormData] = useState({
     name: '',
     category: 'computer' as AssetCategory,
@@ -36,18 +58,35 @@ export default function Warehousing() {
     usefulLife: 5,
   });
 
-  const [importPreview, setImportPreview] = useState<any[]>([]);
+  const [vouchers, setVouchers] = useState<PurchaseVoucher[]>([]);
+  const [importPreview, setImportPreview] = useState<ImportRecord[]>([]);
   const [importStep, setImportStep] = useState<'upload' | 'preview' | 'result'>('upload');
-  const [importResult, setImportResult] = useState({ success: 0, failed: 0, total: 0 });
+  const [importResult, setImportResult] = useState({ success: 0, failed: 0, total: 0, errors: [] as string[] });
+  const [newAssetId, setNewAssetId] = useState<string | null>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    addAsset({
+    if (!formData.name || formData.value <= 0) {
+      alert('请填写完整的资产信息');
+      return;
+    }
+    const id = addAsset({
       ...formData,
       status: 'idle',
       userId: '',
       salvageValue: Math.floor(formData.value * 0.05),
     });
+
+    vouchers.forEach((v) => {
+      addVoucher(id, {
+        name: v.name,
+        type: v.type,
+        size: v.size,
+        dataUrl: v.dataUrl,
+      });
+    });
+
+    setNewAssetId(id);
     alert('资产入库成功！');
     setFormData({
       name: '',
@@ -60,28 +99,219 @@ export default function Warehousing() {
       warrantyPeriod: 12,
       usefulLife: 5,
     });
+    setVouchers([]);
   };
 
-  const simulateImport = () => {
-    const mockData = [
-      { no: 1, name: '笔记本电脑', category: 'computer', value: 5999, purchaseDate: '2024-05-01', department: '技术部', location: 'A栋3层', status: '正常' },
-      { no: 2, name: '台式电脑', category: 'computer', value: 4500, purchaseDate: '2024-05-02', department: '市场部', location: 'B栋2层', status: '正常' },
-      { no: 3, name: '打印机', category: 'computer', value: 2800, purchaseDate: '2024-05-03', department: '行政部', location: 'A栋5层', status: '正常' },
-      { no: 4, name: '办公椅', category: 'furniture', value: 850, purchaseDate: '2024-05-04', department: '人力资源部', location: 'C栋1层', status: '警告：缺少分类' },
-      { no: 5, name: '手机', category: 'electronics', value: 3999, purchaseDate: '2024-05-05', department: '客服部', location: 'D栋3层', status: '正常' },
-    ];
-    setImportPreview(mockData);
-    setImportStep('preview');
+  const handleVoucherUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      Array.from(files).forEach((file) => {
+        if (file.size > 10 * 1024 * 1024) {
+          alert(`文件 ${file.name} 超过10MB限制`);
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const newVoucher: PurchaseVoucher = {
+            id: `temp_${Date.now()}_${Math.random()}`,
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            uploadTime: new Date().toISOString(),
+            dataUrl: event.target?.result as string,
+          };
+          setVouchers((prev) => [...prev, newVoucher]);
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+    if (voucherInputRef.current) {
+      voucherInputRef.current.value = '';
+    }
+  };
+
+  const removeVoucher = (id: string) => {
+    setVouchers((prev) => prev.filter((v) => v.id !== id));
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      const records = parseCSV(content);
+      setImportPreview(records);
+      setImportStep('preview');
+    };
+    reader.readAsText(file);
+  };
+
+  const parseCSV = (content: string): ImportRecord[] => {
+    const lines = content.split('\n').filter((line) => line.trim());
+    if (lines.length < 2) return [];
+
+    const headers = lines[0].split(',').map((h) => h.trim().toLowerCase());
+    const records: ImportRecord[] = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(',').map((v) => v.trim());
+      if (values.length < 4) continue;
+
+      const record: ImportRecord = {
+        name: '',
+        category: 'computer',
+        value: 0,
+        purchaseDate: '',
+        departmentId: '',
+        location: '',
+        description: '',
+        warrantyPeriod: 12,
+        usefulLife: 5,
+        _status: '正常',
+        _error: '',
+      };
+
+      headers.forEach((header, index) => {
+        const value = values[index] || '';
+        switch (header) {
+          case '资产名称':
+          case 'name':
+            record.name = value;
+            break;
+          case '分类':
+          case '资产分类':
+          case 'category':
+            const catMap: Record<string, string> = {
+              '办公设备': 'computer',
+              '办公家具': 'furniture',
+              '电子设备': 'electronics',
+              '车辆': 'vehicle',
+              '其他': 'other',
+              'computer': 'computer',
+              'furniture': 'furniture',
+              'electronics': 'electronics',
+              'vehicle': 'vehicle',
+              'other': 'other',
+            };
+            record.category = catMap[value] || 'other';
+            break;
+          case '价值':
+          case '资产价值':
+          case 'value':
+            record.value = Number(value) || 0;
+            break;
+          case '购置日期':
+          case '购买日期':
+          case 'purchaseDate':
+            record.purchaseDate = value;
+            break;
+          case '部门':
+          case '所属部门':
+          case 'department':
+            const dept = departments.find((d) => d.name === value);
+            record.departmentId = dept?.id || '';
+            break;
+          case '位置':
+          case '存放位置':
+          case 'location':
+            record.location = value;
+            break;
+          case '描述':
+          case '备注':
+          case 'description':
+            record.description = value;
+            break;
+          case '保修期限':
+          case '保修期':
+          case 'warrantyPeriod':
+            record.warrantyPeriod = Number(value) || 12;
+            break;
+          case '使用年限':
+          case 'usefulLife':
+            record.usefulLife = Number(value) || 5;
+            break;
+        }
+      });
+
+      if (!record.name) {
+        record._status = '错误';
+        record._error = '资产名称不能为空';
+      } else if (!record.value || record.value <= 0) {
+        record._status = '错误';
+        record._error = '资产价值必须大于0';
+      } else if (!record.purchaseDate) {
+        record._status = '错误';
+        record._error = '购置日期不能为空';
+      }
+
+      records.push(record);
+    }
+
+    return records;
   };
 
   const handleConfirmImport = () => {
-    const successCount = importPreview.filter((item) => item.status === '正常').length;
-    const failedCount = importPreview.length - successCount;
-    setImportResult({ success: successCount, failed: failedCount, total: importPreview.length });
+    const validRecords = importPreview.filter((r) => r._status === '正常');
+    const errors = importPreview.filter((r) => r._status === '错误').map((r, i) => `第${i + 1}行：${r._error}`);
+
+    const assetsToImport = validRecords.map((r) => ({
+      name: r.name,
+      category: r.category as AssetCategory,
+      value: r.value,
+      purchaseDate: r.purchaseDate,
+      departmentId: r.departmentId || 'dept_001',
+      userId: '',
+      location: r.location,
+      description: r.description,
+      status: 'idle' as const,
+      warrantyPeriod: r.warrantyPeriod,
+      salvageValue: Math.floor(r.value * 0.05),
+      usefulLife: r.usefulLife,
+    }));
+
+    const result = bulkAddAssets(assetsToImport);
+
+    setImportResult({
+      success: result.success,
+      failed: result.failed + errors.length,
+      total: importPreview.length,
+      errors: [...errors, ...result.errors],
+    });
     setImportStep('result');
   };
 
+  const downloadTemplate = () => {
+    const template = '资产名称,分类,价值,购置日期,部门,存放位置,备注,保修期限,使用年限\n示例数据,计算机,5000,2024-01-01,行政部,A栋3层,办公使用,12,5\n示例数据2,办公家具,1500,2024-02-01,技术部,B栋2层,新采购,12,5\n';
+    const blob = new Blob(['\uFEFF' + template], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = '资产导入模板.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const recentAssets = assets.slice(0, 5);
+  const monthAssets = assets.filter((a) => {
+    const now = new Date();
+    const purchase = new Date(a.purchaseDate);
+    return now.getFullYear() === purchase.getFullYear() && now.getMonth() === purchase.getMonth();
+  });
+
+  const deptStats = departments.slice(0, 5).map((dept) => {
+    const count = assets.filter((a) => a.departmentId === dept.id).length;
+    const value = assets
+      .filter((a) => a.departmentId === dept.id)
+      .reduce((sum, a) => sum + a.value, 0);
+    return { ...dept, count, value };
+  });
+
+  const maxCount = Math.max(...deptStats.map((d) => d.count), 1);
 
   return (
     <div className="space-y-6">
@@ -110,7 +340,7 @@ export default function Warehousing() {
               <ArrowDownToLine className="w-5 h-5 text-success-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-slate-900">12</p>
+              <p className="text-2xl font-bold text-slate-900">{monthAssets.length}</p>
               <p className="text-xs text-slate-500">本月入库</p>
             </div>
           </div>
@@ -121,8 +351,10 @@ export default function Warehousing() {
               <DollarSign className="w-5 h-5 text-warning-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-slate-900">¥68.5万</p>
-              <p className="text-xs text-slate-500">入库总值</p>
+              <p className="text-2xl font-bold text-slate-900">
+                {formatCurrency(monthAssets.reduce((sum, a) => sum + a.value, 0))}
+              </p>
+              <p className="text-xs text-slate-500">本月入库总值</p>
             </div>
           </div>
         </div>
@@ -132,7 +364,7 @@ export default function Warehousing() {
               <FileSpreadsheet className="w-5 h-5 text-slate-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-slate-900">3</p>
+              <p className="text-2xl font-bold text-slate-900">{Math.floor(assets.length / 10) + 1}</p>
               <p className="text-xs text-slate-500">批量导入次数</p>
             </div>
           </div>
@@ -196,10 +428,14 @@ export default function Warehousing() {
                     <select
                       className="select"
                       value={formData.category}
-                      onChange={(e) => setFormData({ ...formData, category: e.target.value as AssetCategory })}
+                      onChange={(e) =>
+                        setFormData({ ...formData, category: e.target.value as AssetCategory })
+                      }
                     >
                       {Object.entries(categoryMap).map(([key, val]) => (
-                        <option key={key} value={key}>{val.label}</option>
+                        <option key={key} value={key}>
+                          {val.label}
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -239,7 +475,9 @@ export default function Warehousing() {
                       onChange={(e) => setFormData({ ...formData, departmentId: e.target.value })}
                     >
                       {departments.map((dept) => (
-                        <option key={dept.id} value={dept.id}>{dept.name}</option>
+                        <option key={dept.id} value={dept.id}>
+                          {dept.name}
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -272,7 +510,9 @@ export default function Warehousing() {
                       type="number"
                       className="input"
                       value={formData.warrantyPeriod}
-                      onChange={(e) => setFormData({ ...formData, warrantyPeriod: Number(e.target.value) })}
+                      onChange={(e) =>
+                        setFormData({ ...formData, warrantyPeriod: Number(e.target.value) })
+                      }
                       min={0}
                     />
                   </div>
@@ -284,7 +524,9 @@ export default function Warehousing() {
                       type="number"
                       className="input"
                       value={formData.usefulLife}
-                      onChange={(e) => setFormData({ ...formData, usefulLife: Number(e.target.value) })}
+                      onChange={(e) =>
+                        setFormData({ ...formData, usefulLife: Number(e.target.value) })
+                      }
                       min={1}
                     />
                   </div>
@@ -307,15 +549,77 @@ export default function Warehousing() {
                   <FileSpreadsheet className="w-4 h-4 text-primary-600" />
                   购置凭证
                 </h3>
-                <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center hover:border-primary-400 transition-colors cursor-pointer">
+                <input
+                  ref={voucherInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*,.pdf"
+                  className="hidden"
+                  onChange={handleVoucherUpload}
+                />
+                <div
+                  className="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center hover:border-primary-400 transition-colors cursor-pointer"
+                  onClick={() => voucherInputRef.current?.click()}
+                >
                   <Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" />
                   <p className="text-sm text-slate-600">点击或拖拽上传购置凭证</p>
-                  <p className="text-xs text-slate-400 mt-1">支持 JPG、PNG、PDF 格式，单个文件不超过 10MB</p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    支持 JPG、PNG、PDF 格式，单个文件不超过 10MB
+                  </p>
                 </div>
+
+                {vouchers.length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    {vouchers.map((voucher) => (
+                      <div
+                        key={voucher.id}
+                        className="flex items-center justify-between p-3 bg-slate-50 rounded-lg"
+                      >
+                        <div className="flex items-center gap-3">
+                          {voucher.type.startsWith('image/') ? (
+                            <FileImage className="w-5 h-5 text-primary-500" />
+                          ) : (
+                            <FileText className="w-5 h-5 text-slate-500" />
+                          )}
+                          <div>
+                            <p className="text-sm font-medium text-slate-900">{voucher.name}</p>
+                            <p className="text-xs text-slate-500">
+                              {formatFileSize(voucher.size)} · {formatDateTime(voucher.uploadTime)}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="p-1 hover:bg-slate-200 rounded"
+                          onClick={() => removeVoucher(voucher.id)}
+                        >
+                          <X className="w-4 h-4 text-slate-500" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
-                <button type="button" className="btn-secondary">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setFormData({
+                      name: '',
+                      category: 'computer',
+                      value: 0,
+                      purchaseDate: new Date().toISOString().split('T')[0],
+                      departmentId: 'dept_001',
+                      location: '',
+                      description: '',
+                      warrantyPeriod: 12,
+                      usefulLife: 5,
+                    });
+                    setVouchers([]);
+                  }}
+                >
                   重置
                 </button>
                 <button type="submit" className="btn-primary">
@@ -328,16 +632,42 @@ export default function Warehousing() {
             <div className="p-6">
               {importStep === 'upload' && (
                 <div className="space-y-6">
-                  <div className="border-2 border-dashed border-slate-300 rounded-lg p-12 text-center hover:border-primary-400 transition-colors cursor-pointer">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,.xlsx,.xls"
+                    className="hidden"
+                    onChange={handleFileUpload}
+                  />
+                  <div
+                    className="border-2 border-dashed border-slate-300 rounded-lg p-12 text-center hover:border-primary-400 transition-colors cursor-pointer"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
                     <Upload className="w-12 h-12 text-slate-400 mx-auto mb-4" />
-                    <p className="text-base font-medium text-slate-700 mb-2">点击或拖拽文件到此处</p>
+                    <p className="text-base font-medium text-slate-700 mb-2">
+                      点击或拖拽文件到此处
+                    </p>
                     <p className="text-sm text-slate-500 mb-4">支持 Excel、CSV 格式</p>
                     <div className="flex items-center justify-center gap-3">
-                      <button className="btn-primary" onClick={simulateImport}>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          fileInputRef.current?.click();
+                        }}
+                      >
                         <Upload className="w-4 h-4 mr-2" />
                         选择文件
                       </button>
-                      <button className="btn-secondary">
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          downloadTemplate();
+                        }}
+                      >
                         <Download className="w-4 h-4 mr-2" />
                         下载模板
                       </button>
@@ -351,6 +681,7 @@ export default function Warehousing() {
                       <li>• 资产编号由系统自动生成，无需填写</li>
                       <li>• 必填字段：资产名称、分类、价值、购置日期</li>
                       <li>• 单次导入最多支持 1000 条数据</li>
+                      <li>• 部门名称需与系统中已有的部门名称一致</li>
                     </ul>
                   </div>
                 </div>
@@ -360,15 +691,22 @@ export default function Warehousing() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-slate-900">数据预览</h3>
-                    <span className="text-sm text-slate-500">
-                      共 {importPreview.length} 条数据
+                  <span className="text-sm text-slate-500">
+                    共 {importPreview.length} 条数据，
+                    <span className="text-success-600">
+                      正常 {importPreview.filter((r) => r._status === '正常').length} 条
                     </span>
-                  </div>
-                  
-                  <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="bg-slate-50">
+                    ，
+                    <span className="text-danger-600">
+                      错误 {importPreview.filter((r) => r._status === '错误').length} 条
+                    </span>
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto border border-slate-200 rounded-lg max-h-96">
+                  <table className="w-full">
+                    <thead className="sticky top-0 bg-slate-50">
+                        <tr>
                           <th className="table-header text-xs">序号</th>
                           <th className="table-header text-xs">资产名称</th>
                           <th className="table-header text-xs">分类</th>
@@ -380,27 +718,34 @@ export default function Warehousing() {
                         </tr>
                       </thead>
                       <tbody>
-                        {importPreview.map((item) => (
-                          <tr key={item.no} className="table-row">
-                            <td className="table-cell text-xs">{item.no}</td>
+                        {importPreview.map((item, index) => (
+                          <tr key={index} className="table-row">
+                            <td className="table-cell text-xs">{index + 1}</td>
                             <td className="table-cell text-xs">{item.name}</td>
                             <td className="table-cell text-xs">
-                              {categoryMap[item.category as keyof typeof categoryMap]?.label || item.category}
+                              {
+                                categoryMap[item.category as keyof typeof categoryMap]
+                                  ?.label || item.category
+                              }
                             </td>
                             <td className="table-cell text-xs">{formatCurrency(item.value)}</td>
                             <td className="table-cell text-xs">{formatDate(item.purchaseDate)}</td>
-                            <td className="table-cell text-xs">{item.department}</td>
-                            <td className="table-cell text-xs">{item.location}</td>
                             <td className="table-cell text-xs">
-                              {item.status === '正常' ? (
+                              {departments.find((d) => d.id === item.departmentId)?.name ||
+                                '未指定'}
+                            </td>
+                            <td className="table-cell text-xs">{item.location || '-'}</td>
+                            <td className="table-cell text-xs">
+                              {item._status === '正常' ? (
                                 <span className="inline-flex items-center gap-1 text-success-600">
                                   <CheckCircle className="w-3 h-3" />
                                   正常
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center gap-1 text-warning-600">
+                                <span
+                                  className="inline-flex items-center gap-1 text-danger-600" title={item._error}>
                                   <AlertCircle className="w-3 h-3" />
-                                  {item.status}
+                                  错误
                                 </span>
                               )}
                             </td>
@@ -413,12 +758,21 @@ export default function Warehousing() {
                   <div className="flex justify-between pt-4 border-t border-slate-100">
                     <button
                       className="btn-secondary"
-                      onClick={() => setImportStep('upload')}
+                      onClick={() => {
+                        setImportStep('upload');
+                        setImportPreview([]);
+                      }}
                     >
                       返回上一步
                     </button>
                     <div className="flex gap-3">
-                      <button className="btn-secondary">
+                      <button
+                        className="btn-secondary"
+                        onClick={() => {
+                          setImportPreview([]);
+                          setImportStep('upload');
+                        }}
+                      >
                         <Trash2 className="w-4 h-4 mr-2" />
                         清空数据
                       </button>
@@ -438,10 +792,45 @@ export default function Warehousing() {
                   </div>
                   <h3 className="text-lg font-bold text-slate-900 mb-2">导入完成</h3>
                   <p className="text-sm text-slate-500 mb-6">
-                    共 {importResult.total} 条数据，成功 {importResult.success} 条，失败 {importResult.failed} 条
+                    共 {importResult.total} 条数据，成功{' '}
+                    <span className="text-success-600 font-medium">{importResult.success}</span>{' '}
+                    条，失败{' '}
+                    <span className="text-danger-600 font-medium">{importResult.failed}</span> 条
                   </p>
+
+                  {importResult.errors.length > 0 && (
+                    <div className="text-left bg-danger-50 rounded-lg p-4 mb-6 max-h-40 overflow-y-auto">
+                      <h4 className="text-sm font-medium text-danger-700 mb-2">错误详情</h4>
+                      <ul className="text-xs text-danger-600 space-y-1">
+                        {importResult.errors.map((error, index) => (
+                          <li key={index}>• {error}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
                   <div className="flex justify-center gap-3">
-                    <button className="btn-secondary">
+                    <button
+                      className="btn-secondary"
+                      onClick={() => {
+                        if (importResult.errors.length > 0) {
+                          const content = importResult.errors.join('\n');
+                          const blob = new Blob(['\uFEFF' + content], {
+                            type: 'text/plain;charset=utf-8;',
+                          });
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement('a');
+                          link.href = url;
+                          link.download = '导入错误报告.txt';
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                          URL.revokeObjectURL(url);
+                        } else {
+                          alert('没有错误记录');
+                        }
+                      }}
+                    >
                       下载错误报告
                     </button>
                     <button
@@ -468,7 +857,10 @@ export default function Warehousing() {
             </h3>
             <div className="space-y-3">
               {recentAssets.map((asset) => (
-                <div key={asset.id} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded-lg cursor-pointer">
+                <div
+                  key={asset.id}
+                  className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded-lg cursor-pointer"
+                >
                   <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center flex-shrink-0">
                     <Package className="w-5 h-5 text-primary-600" />
                   </div>
@@ -490,29 +882,23 @@ export default function Warehousing() {
               各部门入库统计
             </h3>
             <div className="space-y-3">
-              {departments.slice(0, 5).map((dept, index) => {
-                const count = Math.floor(Math.random() * 15) + 3;
-                const value = count * (Math.floor(Math.random() * 3000) + 1000);
-                const percent = Math.floor((count / 20) * 100);
-                
-                return (
-                  <div key={dept.id}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-slate-700">{dept.name}</span>
-                      <span className="text-sm font-medium text-slate-900">{count} 台</span>
-                    </div>
-                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-primary-500 to-primary-600 rounded-full transition-all duration-500"
-                        style={{ width: `${percent}%` }}
-                      ></div>
-                    </div>
-                    <p className="text-xs text-slate-500 mt-1 text-right">
-                      {formatCurrency(value)}
-                    </p>
+              {deptStats.map((dept) => (
+                <div key={dept.id}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm text-slate-700">{dept.name}</span>
+                    <span className="text-sm font-medium text-slate-900">{dept.count} 台</span>
                   </div>
-                );
-              })}
+                  <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-primary-500 to-primary-600 rounded-full transition-all duration-500"
+                      style={{ width: `${(dept.count / maxCount) * 100}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1 text-right">
+                    {formatCurrency(dept.value)}
+                  </p>
+                </div>
+              ))}
             </div>
           </div>
         </div>

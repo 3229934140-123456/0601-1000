@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   ClipboardList,
   Plus,
@@ -10,7 +10,6 @@ import {
   QrCode,
   TrendingUp,
   TrendingDown,
-  Minus,
   User,
   Calendar,
   Building2,
@@ -18,11 +17,13 @@ import {
   Scan,
   X,
   Check,
+  Download,
 } from 'lucide-react';
 import { useAssetStore } from '@/store/useAssetStore';
 import { departments } from '@/data/departments';
-import { generateInventoryRecords } from '@/inventory/inventory';
 import { InventoryTask, InventoryRecord } from '@/types';
+import { formatDateTime } from '@/utils/format';
+import { exportInventoryReport } from '@/utils/export';
 
 export default function Inventory() {
   const [activeTab, setActiveTab] = useState<'in_progress' | 'completed'>('in_progress');
@@ -30,11 +31,16 @@ export default function Inventory() {
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
   const [selectedTask, setSelectedTask] = useState<InventoryTask | null>(null);
-  const [records, setRecords] = useState<InventoryRecord[]>([]);
   const [recordTab, setRecordTab] = useState<'all' | 'normal' | 'profit' | 'loss'>('all');
   const [scanInput, setScanInput] = useState('');
+  const [scanResult, setScanResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const inventoryTasks = useAssetStore((state) => state.inventoryTasks);
+  const createInventoryTask = useAssetStore((state) => state.createInventoryTask);
+  const startInventoryTask = useAssetStore((state) => state.startInventoryTask);
+  const checkInventoryAsset = useAssetStore((state) => state.checkInventoryAsset);
+  const completeInventoryTask = useAssetStore((state) => state.completeInventoryTask);
+  const getInventoryRecords = useAssetStore((state) => state.getInventoryRecords);
 
   const [createForm, setCreateForm] = useState({
     name: '',
@@ -46,8 +52,13 @@ export default function Inventory() {
     return task.status === 'completed';
   });
 
+  const records = useMemo(() => {
+    if (!selectedTask) return [];
+    return getInventoryRecords(selectedTask.id);
+  }, [selectedTask, getInventoryRecords, inventoryTasks]);
+
   const stats = {
-    inProgress: inventoryTasks.filter((t) => t.status === 'in_progress').length,
+    inProgress: inventoryTasks.filter((t) => t.status === 'in_progress' || t.status === 'pending').length,
     completed: inventoryTasks.filter((t) => t.status === 'completed').length,
     total: inventoryTasks.length,
   };
@@ -67,40 +78,57 @@ export default function Inventory() {
 
   const handleViewDetail = (task: InventoryTask) => {
     setSelectedTask(task);
-    setRecords(generateInventoryRecords(task.id));
+    setRecordTab('all');
     setShowDetailModal(true);
   };
 
   const handleStartTask = (taskId: string) => {
     if (confirm('确认开始该盘点任务吗？')) {
-      alert('盘点任务已开始！');
+      startInventoryTask(taskId);
+      setSelectedTask(inventoryTasks.find(t => t.id === taskId) || null);
     }
   };
 
   const handleCompleteTask = (taskId: string) => {
     if (confirm('确认完成该盘点任务吗？完成后将生成盘点报告。')) {
-      alert('盘点任务已完成！');
+      completeInventoryTask(taskId);
+      const updatedTask = inventoryTasks.find(t => t.id === taskId);
+      if (updatedTask) {
+        setSelectedTask({ ...updatedTask, status: 'completed' });
+      }
+      setShowScanModal(false);
     }
   };
 
   const handleCreateTask = () => {
-    if (createForm.name) {
-      alert('盘点任务创建成功！');
-      setShowCreateModal(false);
-      setCreateForm({ name: '', departmentIds: [] });
+    if (!createForm.name) {
+      alert('请输入盘点任务名称');
+      return;
     }
+    createInventoryTask({
+      name: createForm.name,
+      departmentIds: createForm.departmentIds,
+      creator: '张明',
+      startDate: new Date().toISOString().split('T')[0],
+    });
+    setShowCreateModal(false);
+    setCreateForm({ name: '', departmentIds: [] });
+    alert('盘点任务创建成功！');
   };
 
   const handleScan = () => {
-    if (scanInput) {
-      const record = records.find((r) => r.assetNo === scanInput);
-      if (record) {
-        alert(`已盘点：${record.assetName} (${record.assetNo})`);
-        setScanInput('');
-      } else {
-        alert('未找到该资产编号对应的盘点记录');
-      }
+    if (!scanInput || !selectedTask) return;
+    
+    const result = checkInventoryAsset(selectedTask.id, scanInput.trim());
+    setScanResult({ success: result.success, message: result.message });
+    setScanInput('');
+    
+    const updatedTask = inventoryTasks.find(t => t.id === selectedTask.id);
+    if (updatedTask) {
+      setSelectedTask(updatedTask);
     }
+    
+    setTimeout(() => setScanResult(null), 2000);
   };
 
   const filteredRecords = records.filter((r) => {
@@ -138,10 +166,17 @@ export default function Inventory() {
 
   const profitCount = records.filter((r) => r.status === 'profit').length;
   const lossCount = records.filter((r) => r.status === 'loss').length;
-  const normalCount = records.filter((r) => r.status === 'normal').length;
+  const normalCount = records.filter((r) => r.status === 'normal' && r.checkedAt).length;
+  const uncheckedCount = records.filter((r) => !r.checkedAt && r.status === 'normal').length;
 
   const inProgressCount = stats.inProgress;
   const completedCount = stats.completed;
+
+  const handleExportReport = () => {
+    if (selectedTask) {
+      exportInventoryReport(selectedTask.name, records, `盘点报告_${selectedTask.name}_${new Date().toISOString().split('T')[0]}.csv`);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -282,7 +317,7 @@ export default function Inventory() {
                     </div>
                   </div>
 
-                  {task.status === 'in_progress' && (
+                  {task.status === 'in_progress' && task.totalAssets > 0 && (
                     <div className="mb-3">
                       <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
                         <span>盘点进度</span>
@@ -335,7 +370,6 @@ export default function Inventory() {
                         className="btn-ghost text-xs py-1.5 px-3"
                         onClick={() => {
                           setSelectedTask(task);
-                          setRecords(generateInventoryRecords(task.id));
                           setShowScanModal(true);
                         }}
                       >
@@ -350,6 +384,15 @@ export default function Inventory() {
                         完成
                       </button>
                     </>
+                  )}
+                  {task.status === 'completed' && (
+                    <button
+                      className="btn-secondary text-xs py-1.5 px-3"
+                      onClick={handleExportReport}
+                    >
+                      <Download className="w-3 h-3 mr-1" />
+                      导出报告
+                    </button>
                   )}
                   <button
                     className="btn-ghost text-xs py-1.5 px-3"
@@ -422,16 +465,7 @@ export default function Inventory() {
                     </label>
                   ))}
                 </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  盘点范围
-                </label>
-                <select className="select">
-                  <option value="all">全部资产</option>
-                  <option value="in_use">在用资产</option>
-                  <option value="idle">闲置资产</option>
-                </select>
+                <p className="text-xs text-slate-500 mt-2">不选择则盘点全部部门</p>
               </div>
             </div>
             <div className="p-6 border-t border-slate-200 flex justify-end gap-3">
@@ -453,7 +487,7 @@ export default function Inventory() {
       {showDetailModal && selectedTask && (
         <div className="modal-overlay" onClick={() => setShowDetailModal(false)}>
           <div
-            className="modal-content max-w-3xl"
+            className="modal-content max-w-3xl max-h-[90vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-6 border-b border-slate-200 flex items-center justify-between">
@@ -461,12 +495,20 @@ export default function Inventory() {
                 <h2 className="text-xl font-bold text-slate-900">{selectedTask.name}</h2>
                 <p className="text-sm text-slate-500 mt-1">盘点详情</p>
               </div>
-              <button
-                className="p-2 hover:bg-slate-100 rounded-lg"
-                onClick={() => setShowDetailModal(false)}
-              >
-                <X className="w-5 h-5 text-slate-500" />
-              </button>
+              <div className="flex items-center gap-2">
+                {selectedTask.status === 'completed' && (
+                  <button className="btn-secondary btn-sm" onClick={handleExportReport}>
+                    <Download className="w-4 h-4 mr-1" />
+                    导出报告
+                  </button>
+                )}
+                <button
+                  className="p-2 hover:bg-slate-100 rounded-lg"
+                  onClick={() => setShowDetailModal(false)}
+                >
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
+              </div>
             </div>
 
             <div className="p-6 border-b border-slate-200">
@@ -513,7 +555,7 @@ export default function Inventory() {
               </div>
             </div>
 
-            <div className="max-h-96 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto">
               <table className="w-full">
                 <thead className="bg-slate-50 sticky top-0">
                   <tr>
@@ -521,6 +563,7 @@ export default function Inventory() {
                     <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">资产名称</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">状态</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">盘点人</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">盘点时间</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">备注</th>
                   </tr>
                 </thead>
@@ -530,12 +573,20 @@ export default function Inventory() {
                       <td className="px-4 py-3 text-sm font-mono text-slate-900">{record.assetNo}</td>
                       <td className="px-4 py-3 text-sm text-slate-700">{record.assetName}</td>
                       <td className="px-4 py-3">{getRecordStatusBadge(record.status)}</td>
-                      <td className="px-4 py-3 text-sm text-slate-500">{record.checkedBy}</td>
+                      <td className="px-4 py-3 text-sm text-slate-500">{record.checkedBy || '-'}</td>
+                      <td className="px-4 py-3 text-sm text-slate-500">
+                        {record.checkedAt ? formatDateTime(record.checkedAt) : '-'}
+                      </td>
                       <td className="px-4 py-3 text-sm text-slate-500">{record.remark || '-'}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              {filteredRecords.length === 0 && (
+                <div className="py-12 text-center text-slate-500">
+                  暂无记录
+                </div>
+              )}
             </div>
 
             <div className="p-6 border-t border-slate-200 flex justify-end gap-3">
@@ -544,9 +595,6 @@ export default function Inventory() {
                 onClick={() => setShowDetailModal(false)}
               >
                 关闭
-              </button>
-              <button className="btn-primary">
-                导出盘点报告
               </button>
             </div>
           </div>
@@ -587,17 +635,44 @@ export default function Inventory() {
                     value={scanInput}
                     onChange={(e) => setScanInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleScan()}
+                    autoFocus
                   />
                   <button className="btn-primary" onClick={handleScan}>
                     确认
                   </button>
                 </div>
+                {scanResult && (
+                  <div className={`mt-3 p-3 rounded-lg text-sm ${
+                    scanResult.success ? 'bg-success-50 text-success-700' : 'bg-danger-50 text-danger-700'
+                  }`}>
+                    {scanResult.message}
+                  </div>
+                )}
               </div>
 
               <div className="border-t border-slate-200 pt-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium text-slate-700">盘点进度</h3>
+                  <span className="text-xs text-slate-500">
+                    {selectedTask.checkedAssets} / {selectedTask.totalAssets}
+                  </span>
+                </div>
+                <div className="h-2 bg-slate-100 rounded-full overflow-hidden mb-4">
+                  <div
+                    className="h-full bg-primary-500 rounded-full transition-all"
+                    style={{
+                      width: `${selectedTask.totalAssets > 0 ? (selectedTask.checkedAssets / selectedTask.totalAssets) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+
                 <h3 className="text-sm font-medium text-slate-700 mb-3">最近盘点</h3>
                 <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {records.slice(0, 5).map((record) => (
+                  {records
+                    .filter(r => r.checkedAt)
+                    .slice(-5)
+                    .reverse()
+                    .map((record) => (
                     <div
                       key={record.id}
                       className="flex items-center justify-between p-2 bg-slate-50 rounded"
@@ -611,6 +686,21 @@ export default function Inventory() {
                   ))}
                 </div>
               </div>
+            </div>
+            <div className="p-6 border-t border-slate-200 flex justify-end gap-3">
+              <button
+                className="btn-secondary"
+                onClick={() => setShowScanModal(false)}
+              >
+                关闭
+              </button>
+              <button
+                className="btn-success"
+                onClick={() => handleCompleteTask(selectedTask.id)}
+              >
+                <CheckCircle className="w-4 h-4 mr-2" />
+                完成盘点
+              </button>
             </div>
           </div>
         </div>

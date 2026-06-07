@@ -95,6 +95,10 @@ body {
     @apply badge bg-purple-100 text-purple-700;
   }
 
+  .badge-scrapping {
+    @apply badge bg-orange-100 text-orange-700;
+  }
+
   .badge-scrapped {
     @apply badge bg-danger-100 text-danger-700;
   }

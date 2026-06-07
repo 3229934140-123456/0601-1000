@@ -31,10 +31,19 @@ import {
   Legend,
 } from 'recharts';
 import { useAssetStore } from '@/store/useAssetStore';
-import { formatCurrency } from '@/utils/format';
+import { formatCurrency, formatDate } from '@/utils/format';
 import { departments } from '@/data/departments';
 import { categoryMap } from '@/types';
 import { calculateYearlyDepreciation } from '@/utils/depreciation';
+import {
+  exportAssetList,
+  exportDepreciationReport,
+  exportTransferOrders,
+  exportMaintenanceOrders,
+  exportScrapOrders,
+  exportInventoryReport,
+  downloadCSV,
+} from '@/utils/export';
 
 const CHART_COLORS = ['#1e3a5f', '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd', '#bfdbfe'];
 
@@ -45,6 +54,10 @@ export default function Reports() {
   const assets = useAssetStore((state) => state.assets);
   const maintenanceOrders = useAssetStore((state) => state.maintenanceOrders);
   const transferOrders = useAssetStore((state) => state.transferOrders);
+  const scrapOrders = useAssetStore((state) => state.scrapOrders);
+  const inventoryTasks = useAssetStore((state) => state.inventoryTasks);
+  const getInventoryRecords = useAssetStore((state) => state.getInventoryRecords);
+  const assetLogs = useAssetStore((state) => state.assetLogs);
 
   const stats = {
     totalAssets: assets.length,
@@ -57,7 +70,6 @@ export default function Reports() {
 
   const categoryData = Object.entries(categoryMap).map(([key, value]) => ({
     name: value.label,
-    value: assets.filter((a) => a.category === key).length,
     value: assets.filter((a) => a.category === key).reduce((sum, a) => sum + a.value, 0),
     count: assets.filter((a) => a.category === key).length,
   }));
@@ -111,7 +123,103 @@ export default function Reports() {
   ];
 
   const handleExport = (type: string) => {
-    alert(`正在导出${type}...`);
+    const dateStr = new Date().toISOString().split('T')[0];
+    
+    switch (type) {
+      case '资产台账清单':
+        exportAssetList(assets, `资产清单_${dateStr}.csv`);
+        break;
+      case '部门资产报表': {
+        const headers = ['部门名称', '资产数量', '资产总值', '占比'];
+        const totalValue = assets.reduce((sum, a) => sum + a.value, 0);
+        const rows = departments.map((dept) => {
+          const deptAssets = assets.filter((a) => a.departmentId === dept.id);
+          const deptValue = deptAssets.reduce((sum, a) => sum + a.value, 0);
+          return [
+            dept.name,
+            deptAssets.length,
+            formatCurrency(deptValue),
+            `${((deptValue / totalValue) * 100).toFixed(1)}%`,
+          ];
+        });
+        const csvContent = [headers, ...rows].map((row) => row.map((v) => `"${v}"`).join(',')).join('\n');
+        downloadCSV(csvContent, `部门资产报表_${dateStr}.csv`);
+        break;
+      }
+      case '折旧明细表':
+        exportDepreciationReport(assets, `折旧明细表_${dateStr}.csv`);
+        break;
+      case '维修费用报表':
+        exportMaintenanceOrders(maintenanceOrders, `维修工单_${dateStr}.csv`);
+        break;
+      case '盘点报告': {
+        const completedTasks = inventoryTasks.filter((t) => t.status === 'completed');
+        if (completedTasks.length === 0) {
+          alert('暂无已完成的盘点任务');
+          return;
+        }
+        const latestTask = completedTasks[0];
+        const records = getInventoryRecords(latestTask.id);
+        exportInventoryReport(latestTask.name, records, `盘点报告_${latestTask.name}_${dateStr}.csv`);
+        break;
+      }
+      case '调拨记录':
+        exportTransferOrders(transferOrders, `调拨记录_${dateStr}.csv`);
+        break;
+      case '报废清单':
+        exportScrapOrders(scrapOrders, `报废清单_${dateStr}.csv`);
+        break;
+      case '操作日志': {
+        const headers = ['资产编号', '资产名称', '操作类型', '操作人', '操作时间', '备注'];
+        const allLogs: Array<{
+          assetNo: string;
+          assetName: string;
+          action: string;
+          operator: string;
+          createdAt: string;
+          remark: string;
+        }> = [];
+        
+        assets.forEach((asset) => {
+          const logs = assetLogs[asset.id] || [];
+          logs.forEach((log) => {
+            allLogs.push({
+              assetNo: asset.assetNo,
+              assetName: asset.name,
+              action: log.action,
+              operator: log.operator,
+              createdAt: log.createdAt,
+              remark: log.remark || '',
+            });
+          });
+        });
+        
+        allLogs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        
+        const rows = allLogs.map((log) => [
+          log.assetNo,
+          log.assetName,
+          log.action,
+          log.operator,
+          formatDate(log.createdAt),
+          log.remark,
+        ]);
+        
+        const csvContent = [headers, ...rows].map((row) => row.map((v) => `"${v}"`).join(',')).join('\n');
+        downloadCSV(csvContent, `操作日志_${dateStr}.csv`);
+        break;
+      }
+      case '全部报表':
+        exportAssetList(assets, `资产清单_${dateStr}.csv`);
+        exportDepreciationReport(assets, `折旧明细表_${dateStr}.csv`);
+        exportTransferOrders(transferOrders, `调拨记录_${dateStr}.csv`);
+        exportMaintenanceOrders(maintenanceOrders, `维修工单_${dateStr}.csv`);
+        exportScrapOrders(scrapOrders, `报废清单_${dateStr}.csv`);
+        alert('已导出全部报表到下载文件夹');
+        break;
+      default:
+        alert(`正在导出${type}...`);
+    }
   };
 
   const totalMaintenanceCost = maintenanceOrders

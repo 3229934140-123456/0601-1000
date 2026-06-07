@@ -1,5 +1,17 @@
 import { create } from 'zustand';
-import { Asset, AssetFilter, AssetStatus, AssetCategory, AssetLog, MaintenanceOrder, TransferOrder, InventoryTask } from '@/types';
+import {
+  Asset,
+  AssetFilter,
+  AssetStatus,
+  AssetCategory,
+  AssetLog,
+  MaintenanceOrder,
+  TransferOrder,
+  InventoryTask,
+  InventoryRecord,
+  ScrapOrder,
+  PurchaseVoucher,
+} from '@/types';
 import { initialAssets } from '@/data/assets';
 import { maintenanceOrders as initialMaintenanceOrders } from '@/data/maintenance';
 import { transferOrders as initialTransferOrders } from '@/data/transfers';
@@ -7,6 +19,7 @@ import { inventoryTasks as initialInventoryTasks } from '@/inventory/inventory';
 import { getStorage, setStorage } from '@/utils/storage';
 import { generateAssetNo, getNextSequence } from '@/utils/assetNo';
 import { generateId } from '@/utils/format';
+import { getDepartmentName } from '@/data/users';
 
 interface AssetState {
   assets: Asset[];
@@ -14,33 +27,59 @@ interface AssetState {
   maintenanceOrders: MaintenanceOrder[];
   transferOrders: TransferOrder[];
   inventoryTasks: InventoryTask[];
+  inventoryRecords: Record<string, InventoryRecord[]>;
+  scrapOrders: ScrapOrder[];
   filters: AssetFilter;
   selectedAssetIds: string[];
   currentPage: number;
   pageSize: number;
-  
+
   setFilters: (filters: Partial<AssetFilter>) => void;
   setCurrentPage: (page: number) => void;
   toggleAssetSelection: (assetId: string) => void;
   clearSelection: () => void;
   selectAll: (assetIds: string[]) => void;
-  
-  addAsset: (asset: Omit<Asset, 'id' | 'assetNo' | 'createdAt' | 'updatedAt'>) => void;
+
+  addAsset: (asset: Omit<Asset, 'id' | 'assetNo' | 'createdAt' | 'updatedAt'>) => string;
   updateAsset: (id: string, updates: Partial<Asset>) => void;
   deleteAsset: (id: string) => void;
+  bulkAddAssets: (
+    assets: Array<Omit<Asset, 'id' | 'assetNo' | 'createdAt' | 'updatedAt'>>
+  ) => { success: number; failed: number; errors: string[] };
   bulkUpdateStatus: (ids: string[], status: AssetStatus) => void;
-  bulkTransfer: (ids: string[], toDeptId: string, toDeptName: string) => void;
-  scrapAsset: (id: string, reason: string) => void;
-  
+
+  addVoucher: (assetId: string, voucher: Omit<PurchaseVoucher, 'id' | 'uploadTime'>) => void;
+  removeVoucher: (assetId: string, voucherId: string) => void;
+
   addLog: (assetId: string, log: Omit<AssetLog, 'id' | 'assetId' | 'createdAt'>) => void;
   getLogs: (assetId: string) => AssetLog[];
-  
+
   addMaintenanceOrder: (order: Omit<MaintenanceOrder, 'id'>) => void;
   updateMaintenanceOrder: (id: string, updates: Partial<MaintenanceOrder>) => void;
-  
+
   addTransferOrder: (order: Omit<TransferOrder, 'id'>) => void;
   updateTransferOrder: (id: string, updates: Partial<TransferOrder>) => void;
-  
+  bulkTransfer: (ids: string[], toDeptId: string, toDeptName: string, reason: string) => void;
+
+  submitScrapOrder: (
+    assetId: string,
+    reason: string,
+    estimatedSalvageValue: number
+  ) => void;
+  approveScrapOrder: (id: string, remark?: string) => void;
+  rejectScrapOrder: (id: string, remark: string) => void;
+  bulkSubmitScrap: (
+    ids: string[],
+    reason: string,
+    estimatedSalvageValue: number
+  ) => void;
+
+  createInventoryTask: (task: Omit<InventoryTask, 'id' | 'status' | 'totalAssets' | 'checkedAssets' | 'profitAssets' | 'lossAssets'>) => string;
+  startInventoryTask: (id: string) => void;
+  checkInventoryAsset: (taskId: string, assetNo: string) => { success: boolean; message: string; record?: InventoryRecord };
+  completeInventoryTask: (id: string) => void;
+  getInventoryRecords: (taskId: string) => InventoryRecord[];
+
   getFilteredAssets: () => { items: Asset[]; total: number };
   getAssetById: (id: string) => Asset | undefined;
   getAssetStats: () => {
@@ -50,10 +89,11 @@ interface AssetState {
     inUseCount: number;
     maintenanceCount: number;
     scrappedCount: number;
+    scrappingCount: number;
   };
 }
 
-const STORAGE_KEY = 'asset_data';
+const STORAGE_KEY = 'asset_data_v2';
 
 function loadInitialData() {
   const saved = getStorage<{
@@ -61,42 +101,62 @@ function loadInitialData() {
     maintenanceOrders: MaintenanceOrder[];
     transferOrders: TransferOrder[];
     inventoryTasks: InventoryTask[];
+    inventoryRecords: Record<string, InventoryRecord[]>;
+    scrapOrders: ScrapOrder[];
+    assetLogs: Record<string, AssetLog[]>;
   } | null>(STORAGE_KEY, null);
-  
+
   if (saved) {
     return saved;
   }
-  
+
   return {
     assets: initialAssets,
     maintenanceOrders: initialMaintenanceOrders,
     transferOrders: initialTransferOrders,
     inventoryTasks: initialInventoryTasks,
+    inventoryRecords: {},
+    scrapOrders: [],
+    assetLogs: {},
   };
+}
+
+function saveData(state: Partial<AssetState>) {
+  setStorage(STORAGE_KEY, {
+    assets: state.assets || [],
+    maintenanceOrders: state.maintenanceOrders || [],
+    transferOrders: state.transferOrders || [],
+    inventoryTasks: state.inventoryTasks || [],
+    inventoryRecords: state.inventoryRecords || {},
+    scrapOrders: state.scrapOrders || [],
+    assetLogs: state.assetLogs || {},
+  });
 }
 
 const initialData = loadInitialData();
 
 export const useAssetStore = create<AssetState>((set, get) => ({
   assets: initialData.assets,
-  assetLogs: {},
+  assetLogs: initialData.assetLogs || {},
   maintenanceOrders: initialData.maintenanceOrders,
   transferOrders: initialData.transferOrders,
   inventoryTasks: initialData.inventoryTasks,
+  inventoryRecords: initialData.inventoryRecords || {},
+  scrapOrders: initialData.scrapOrders || [],
   filters: {},
   selectedAssetIds: [],
   currentPage: 1,
   pageSize: 10,
-  
+
   setFilters: (filters) => {
     set((state) => ({
       filters: { ...state.filters, ...filters },
       currentPage: 1,
     }));
   },
-  
+
   setCurrentPage: (page) => set({ currentPage: page }),
-  
+
   toggleAssetSelection: (assetId) => {
     set((state) => {
       const selected = state.selectedAssetIds.includes(assetId)
@@ -105,142 +165,242 @@ export const useAssetStore = create<AssetState>((set, get) => ({
       return { selectedAssetIds: selected };
     });
   },
-  
+
   clearSelection: () => set({ selectedAssetIds: [] }),
-  
+
   selectAll: (assetIds) => set({ selectedAssetIds: assetIds }),
-  
+
   addAsset: (asset) => {
-    set((state) => {
-      const existingNos = state.assets.map((a) => a.assetNo);
-      const seq = getNextSequence(existingNos, asset.category);
-      const assetNo = generateAssetNo(asset.category, seq);
-      const now = new Date().toISOString();
-      const newAsset: Asset = {
-        ...asset,
-        id: `asset_${generateId()}`,
-        assetNo,
-        createdAt: now,
-        updatedAt: now,
-      };
-      
-      const newState = {
-        assets: [newAsset, ...state.assets],
-      };
-      
-      setStorage(STORAGE_KEY, {
-        assets: newState.assets,
-        maintenanceOrders: state.maintenanceOrders,
-        transferOrders: state.transferOrders,
-        inventoryTasks: state.inventoryTasks,
-      });
-      
-      return newState;
-    });
+    const state = get();
+    const existingNos = state.assets.map((a) => a.assetNo);
+    const seq = getNextSequence(existingNos, asset.category);
+    const assetNo = generateAssetNo(asset.category, seq);
+    const now = new Date().toISOString();
+    const newAsset: Asset = {
+      ...asset,
+      id: `asset_${generateId()}`,
+      assetNo,
+      createdAt: now,
+      updatedAt: now,
+      vouchers: [],
+    };
+
+    const newAssets = [newAsset, ...state.assets];
+    const newLogs = {
+      ...state.assetLogs,
+      [newAsset.id]: [
+        {
+          id: generateId(),
+          assetId: newAsset.id,
+          action: '资产入库',
+          operator: '张明',
+          operatorId: 'user_001',
+          createdAt: now,
+          remark: `资产${newAsset.name}入库，编号${newAsset.assetNo}`,
+        },
+        ...(state.assetLogs[newAsset.id] || []),
+      ],
+    };
+
+    const newState = {
+      ...state,
+      assets: newAssets,
+      assetLogs: newLogs,
+    };
+    saveData(newState);
+    set(newState);
+    return newAsset.id;
   },
-  
+
   updateAsset: (id, updates) => {
-    set((state) => {
-      const newAssets = state.assets.map((a) =>
-        a.id === id ? { ...a, ...updates, updatedAt: new Date().toISOString() } : a
-      );
-      
-      setStorage(STORAGE_KEY, {
-        assets: newAssets,
-        maintenanceOrders: state.maintenanceOrders,
-        transferOrders: state.transferOrders,
-        inventoryTasks: state.inventoryTasks,
-      });
-      
-      return { assets: newAssets };
-    });
+    const state = get();
+    const newAssets = state.assets.map((a) =>
+      a.id === id ? { ...a, ...updates, updatedAt: new Date().toISOString() } : a
+    );
+
+    const newState = { ...state, assets: newAssets };
+    saveData(newState);
+    set(newState);
   },
-  
+
   deleteAsset: (id) => {
-    set((state) => {
-      const newAssets = state.assets.filter((a) => a.id !== id);
-      
-      setStorage(STORAGE_KEY, {
-        assets: newAssets,
-        maintenanceOrders: state.maintenanceOrders,
-        transferOrders: state.transferOrders,
-        inventoryTasks: state.inventoryTasks,
-      });
-      
-      return { assets: newAssets };
-    });
+    const state = get();
+    const newAssets = state.assets.filter((a) => a.id !== id);
+
+    const newState = { ...state, assets: newAssets };
+    saveData(newState);
+    set(newState);
   },
-  
-  bulkUpdateStatus: (ids, status) => {
-    set((state) => {
-      const newAssets = state.assets.map((a) =>
-        ids.includes(a.id) ? { ...a, status, updatedAt: new Date().toISOString() } : a
-      );
-      
-      setStorage(STORAGE_KEY, {
-        assets: newAssets,
-        maintenanceOrders: state.maintenanceOrders,
-        transferOrders: state.transferOrders,
-        inventoryTasks: state.inventoryTasks,
-      });
-      
-      return { assets: newAssets, selectedAssetIds: [] };
-    });
-  },
-  
-  bulkTransfer: (ids, toDeptId, toDeptName) => {
-    set((state) => {
-      const now = new Date().toISOString();
-      const newTransferOrders: TransferOrder[] = ids.map((id) => {
-        const asset = state.assets.find((a) => a.id === id);
-        return {
-          id: `to_${generateId()}`,
-          assetId: id,
-          assetName: asset?.name || '',
-          assetNo: asset?.assetNo || '',
-          fromDeptId: asset?.departmentId || '',
-          fromDeptName: '',
-          toDeptId,
-          toDeptName,
-          status: 'pending',
-          reason: '批量调拨',
-          applicant: '系统管理员',
-          applicantId: 'user_001',
-          applyDate: now.split('T')[0],
+
+  bulkAddAssets: (assetList) => {
+    const state = get();
+    const errors: string[] = [];
+    const newAssets: Asset[] = [];
+    const newLogs: Record<string, AssetLog[]> = { ...state.assetLogs };
+    let existingNos = state.assets.map((a) => a.assetNo);
+
+    assetList.forEach((asset, index) => {
+      try {
+        if (!asset.name) {
+          errors.push(`第${index + 1}行：资产名称不能为空`);
+          return;
+        }
+        if (!asset.category) {
+          errors.push(`第${index + 1}行：资产分类不能为空`);
+          return;
+        }
+        if (!asset.value || asset.value <= 0) {
+          errors.push(`第${index + 1}行：资产价值必须大于0`);
+          return;
+        }
+        if (!asset.purchaseDate) {
+          errors.push(`第${index + 1}行：购置日期不能为空`);
+          return;
+        }
+
+        const seq = getNextSequence(existingNos, asset.category);
+        const assetNo = generateAssetNo(asset.category, seq);
+        existingNos.push(assetNo);
+        const now = new Date().toISOString();
+
+        const newAsset: Asset = {
+          ...asset,
+          id: `asset_${generateId()}`,
+          assetNo,
+          createdAt: now,
+          updatedAt: now,
+          vouchers: [],
         };
-      });
-      
-      setStorage(STORAGE_KEY, {
-        assets: state.assets,
-        maintenanceOrders: state.maintenanceOrders,
-        transferOrders: [...newTransferOrders, ...state.transferOrders],
-        inventoryTasks: state.inventoryTasks,
-      });
-      
-      return {
-        transferOrders: [...newTransferOrders, ...state.transferOrders],
-        selectedAssetIds: [],
-      };
+
+        newAssets.push(newAsset);
+        newLogs[newAsset.id] = [
+          {
+            id: generateId(),
+            assetId: newAsset.id,
+            action: '批量入库',
+            operator: '张明',
+            operatorId: 'user_001',
+            createdAt: now,
+            remark: `通过批量导入入库，编号${newAsset.assetNo}`,
+          },
+        ];
+      } catch (e) {
+        errors.push(`第${index + 1}行：数据格式错误`);
+      }
     });
+
+    const newState = {
+      ...state,
+      assets: [...newAssets, ...state.assets],
+      assetLogs: newLogs,
+    };
+    saveData(newState);
+    set(newState);
+
+    return {
+      success: newAssets.length,
+      failed: errors.length,
+      errors,
+    };
   },
-  
-  scrapAsset: (id, reason) => {
-    set((state) => {
-      const newAssets = state.assets.map((a) =>
-        a.id === id ? { ...a, status: 'scrapped' as AssetStatus, updatedAt: new Date().toISOString() } : a
-      );
-      
-      setStorage(STORAGE_KEY, {
-        assets: newAssets,
-        maintenanceOrders: state.maintenanceOrders,
-        transferOrders: state.transferOrders,
-        inventoryTasks: state.inventoryTasks,
-      });
-      
-      return { assets: newAssets };
+
+  bulkUpdateStatus: (ids, status) => {
+    const state = get();
+    const now = new Date().toISOString();
+    const newAssets = state.assets.map((a) =>
+      ids.includes(a.id) ? { ...a, status, updatedAt: now } : a
+    );
+
+    const newLogs = { ...state.assetLogs };
+    ids.forEach((id) => {
+      const asset = state.assets.find((a) => a.id === id);
+      if (asset) {
+        newLogs[id] = [
+          {
+            id: generateId(),
+            assetId: id,
+            action: '状态变更',
+            operator: '张明',
+            operatorId: 'user_001',
+            createdAt: now,
+            oldValue: asset.status,
+            newValue: status,
+            remark: `状态从${asset.status}变更为${status}`,
+          },
+          ...(newLogs[id] || []),
+        ];
+      }
     });
+
+    const newState = {
+      ...state,
+      assets: newAssets,
+      selectedAssetIds: [],
+      assetLogs: newLogs,
+    };
+    saveData(newState);
+    set(newState);
   },
-  
+
+  addVoucher: (assetId, voucher) => {
+    const state = get();
+    const now = new Date().toISOString();
+    const newVoucher: PurchaseVoucher = {
+      ...voucher,
+      id: `voucher_${generateId()}`,
+      uploadTime: now,
+    };
+
+    const newAssets = state.assets.map((a) => {
+      if (a.id === assetId) {
+        return {
+          ...a,
+          vouchers: [...(a.vouchers || []), newVoucher],
+          updatedAt: now,
+        };
+      }
+      return a;
+    });
+
+    const newLogs = { ...state.assetLogs };
+    newLogs[assetId] = [
+      {
+        id: generateId(),
+        assetId,
+        action: '上传凭证',
+        operator: '张明',
+        operatorId: 'user_001',
+        createdAt: now,
+        remark: `上传购置凭证：${voucher.name}`,
+      },
+      ...(newLogs[assetId] || []),
+    ];
+
+    const newState = { ...state, assets: newAssets, assetLogs: newLogs };
+    saveData(newState);
+    set(newState);
+  },
+
+  removeVoucher: (assetId, voucherId) => {
+    const state = get();
+    const now = new Date().toISOString();
+
+    const newAssets = state.assets.map((a) => {
+      if (a.id === assetId) {
+        return {
+          ...a,
+          vouchers: (a.vouchers || []).filter((v) => v.id !== voucherId),
+          updatedAt: now,
+        };
+      }
+      return a;
+    });
+
+    const newState = { ...state, assets: newAssets };
+    saveData(newState);
+    set(newState);
+  },
+
   addLog: (assetId, log) => {
     set((state) => {
       const logs = state.assetLogs[assetId] || [];
@@ -258,106 +418,613 @@ export const useAssetStore = create<AssetState>((set, get) => ({
       };
     });
   },
-  
+
   getLogs: (assetId) => {
     return get().assetLogs[assetId] || [];
   },
-  
+
   addMaintenanceOrder: (order) => {
-    set((state) => {
-      const newOrder: MaintenanceOrder = {
-        ...order,
-        id: `mo_${generateId()}`,
-      };
-      
-      setStorage(STORAGE_KEY, {
-        assets: state.assets,
-        maintenanceOrders: [newOrder, ...state.maintenanceOrders],
-        transferOrders: state.transferOrders,
-        inventoryTasks: state.inventoryTasks,
-      });
-      
-      return { maintenanceOrders: [newOrder, ...state.maintenanceOrders] };
-    });
+    const state = get();
+    const newOrder: MaintenanceOrder = {
+      ...order,
+      id: `mo_${generateId()}`,
+    };
+
+    const newState = {
+      ...state,
+      maintenanceOrders: [newOrder, ...state.maintenanceOrders],
+    };
+    saveData(newState);
+    set(newState);
   },
-  
+
   updateMaintenanceOrder: (id, updates) => {
-    set((state) => {
-      const newOrders = state.maintenanceOrders.map((o) =>
-        o.id === id ? { ...o, ...updates } : o
-      );
-      
-      setStorage(STORAGE_KEY, {
-        assets: state.assets,
-        maintenanceOrders: newOrders,
-        transferOrders: state.transferOrders,
-        inventoryTasks: state.inventoryTasks,
-      });
-      
-      return { maintenanceOrders: newOrders };
-    });
+    const state = get();
+    const newOrders = state.maintenanceOrders.map((o) =>
+      o.id === id ? { ...o, ...updates } : o
+    );
+
+    const newState = { ...state, maintenanceOrders: newOrders };
+    saveData(newState);
+    set(newState);
   },
-  
+
   addTransferOrder: (order) => {
-    set((state) => {
-      const newOrder: TransferOrder = {
-        ...order,
-        id: `to_${generateId()}`,
-      };
-      
-      setStorage(STORAGE_KEY, {
-        assets: state.assets,
-        maintenanceOrders: state.maintenanceOrders,
-        transferOrders: [newOrder, ...state.transferOrders],
-        inventoryTasks: state.inventoryTasks,
-      });
-      
-      return { transferOrders: [newOrder, ...state.transferOrders] };
-    });
+    const state = get();
+    const now = new Date().toISOString();
+    const newOrder: TransferOrder = {
+      ...order,
+      id: `to_${generateId()}`,
+    };
+
+    const newAssets = state.assets.map((a) =>
+      a.id === order.assetId ? { ...a, status: 'transferred' as AssetStatus, updatedAt: now } : a
+    );
+
+    const newLogs = { ...state.assetLogs };
+    if (order.assetId) {
+      newLogs[order.assetId] = [
+        {
+          id: generateId(),
+          assetId: order.assetId,
+          action: '发起调拨',
+          operator: order.applicant,
+          operatorId: order.applicantId,
+          createdAt: now,
+          remark: `调拨至${order.toDeptName}，原因：${order.reason}`,
+        },
+        ...(newLogs[order.assetId] || []),
+      ];
+    }
+
+    const newState = {
+      ...state,
+      transferOrders: [newOrder, ...state.transferOrders],
+      assets: newAssets,
+      assetLogs: newLogs,
+    };
+    saveData(newState);
+    set(newState);
   },
-  
+
   updateTransferOrder: (id, updates) => {
-    set((state) => {
-      const newOrders = state.transferOrders.map((o) =>
-        o.id === id ? { ...o, ...updates } : o
-      );
-      
-      if (updates.status === 'completed') {
-        const order = state.transferOrders.find((o) => o.id === id);
-        if (order) {
-          const newAssets = state.assets.map((a) =>
-            a.id === order.assetId
-              ? { ...a, departmentId: order.toDeptId, status: 'idle' as AssetStatus, updatedAt: new Date().toISOString() }
-              : a
-          );
-          
-          setStorage(STORAGE_KEY, {
-            assets: newAssets,
-            maintenanceOrders: state.maintenanceOrders,
-            transferOrders: newOrders,
-            inventoryTasks: state.inventoryTasks,
-          });
-          
-          return { transferOrders: newOrders, assets: newAssets };
+    const state = get();
+    const now = new Date().toISOString();
+    const order = state.transferOrders.find((o) => o.id === id);
+
+    if (!order) return;
+
+    const newOrders = state.transferOrders.map((o) =>
+      o.id === id ? { ...o, ...updates } : o
+    );
+
+    let newAssets = state.assets;
+    let newLogs = { ...state.assetLogs };
+
+    if (updates.status === 'approved') {
+      newLogs[order.assetId] = [
+        {
+          id: generateId(),
+          assetId: order.assetId,
+          action: '调拨批准',
+          operator: updates.approver || '张明',
+          operatorId: 'user_001',
+          createdAt: now,
+          remark: `调拨申请已批准，待调入部门确认接收`,
+        },
+        ...(newLogs[order.assetId] || []),
+      ];
+    }
+
+    if (updates.status === 'rejected') {
+      newAssets = state.assets.map((a) => {
+        if (a.id === order.assetId) {
+          return { ...a, status: 'idle' as AssetStatus, updatedAt: now };
         }
-      }
-      
-      setStorage(STORAGE_KEY, {
-        assets: state.assets,
-        maintenanceOrders: state.maintenanceOrders,
-        transferOrders: newOrders,
-        inventoryTasks: state.inventoryTasks,
+        return a;
       });
-      
-      return { transferOrders: newOrders };
-    });
+      newLogs[order.assetId] = [
+        {
+          id: generateId(),
+          assetId: order.assetId,
+          action: '调拨拒绝',
+          operator: updates.approver || '张明',
+          operatorId: 'user_001',
+          createdAt: now,
+          remark: `调拨申请被拒绝，原因：${updates.approveRemark || '未填写'}`,
+        },
+        ...(newLogs[order.assetId] || []),
+      ];
+    }
+
+    if (updates.status === 'completed') {
+      newAssets = state.assets.map((a) =>
+        a.id === order.assetId
+          ? {
+              ...a,
+              departmentId: order.toDeptId,
+              status: 'idle' as AssetStatus,
+              updatedAt: now,
+            }
+          : a
+      );
+      newLogs[order.assetId] = [
+        {
+          id: generateId(),
+          assetId: order.assetId,
+          action: '调拨完成',
+          operator: '系统',
+          operatorId: 'system',
+          createdAt: now,
+          oldValue: order.fromDeptName,
+          newValue: order.toDeptName,
+          remark: `资产从${order.fromDeptName}调拨至${order.toDeptName}`,
+        },
+        ...(newLogs[order.assetId] || []),
+      ];
+    }
+
+    const newState = {
+      ...state,
+      transferOrders: newOrders,
+      assets: newAssets,
+      assetLogs: newLogs,
+    };
+    saveData(newState);
+    set(newState);
   },
-  
+
+  bulkTransfer: (ids, toDeptId, toDeptName, reason) => {
+    const state = get();
+    const now = new Date().toISOString();
+    const newTransferOrders: TransferOrder[] = [];
+    let newAssets = [...state.assets];
+    const newLogs = { ...state.assetLogs };
+
+    ids.forEach((id) => {
+      const asset = state.assets.find((a) => a.id === id);
+      if (asset && (asset.status === 'idle' || asset.status === 'in_use')) {
+        const fromDeptName = getDepartmentName(asset.departmentId);
+        const order: TransferOrder = {
+          id: `to_${generateId()}`,
+          assetId: id,
+          assetName: asset.name,
+          assetNo: asset.assetNo,
+          fromDeptId: asset.departmentId,
+          fromDeptName,
+          toDeptId,
+          toDeptName,
+          status: 'pending',
+          reason,
+          applicant: '张明',
+          applicantId: 'user_001',
+          applyDate: now.split('T')[0],
+        };
+        newTransferOrders.push(order);
+
+        newAssets = newAssets.map((a) =>
+          a.id === id ? { ...a, status: 'transferred' as AssetStatus, updatedAt: now } : a
+        );
+
+        newLogs[id] = [
+          {
+            id: generateId(),
+            assetId: id,
+            action: '批量调拨',
+            operator: '张明',
+            operatorId: 'user_001',
+            createdAt: now,
+            remark: `批量调拨至${toDeptName}，原因：${reason}`,
+          },
+          ...(newLogs[id] || []),
+        ];
+      }
+    });
+
+    const newState = {
+      ...state,
+      transferOrders: [...newTransferOrders, ...state.transferOrders],
+      assets: newAssets,
+      selectedAssetIds: [],
+      assetLogs: newLogs,
+    };
+    saveData(newState);
+    set(newState);
+  },
+
+  submitScrapOrder: (assetId, reason, estimatedSalvageValue) => {
+    const state = get();
+    const now = new Date().toISOString();
+    const asset = state.assets.find((a) => a.id === assetId);
+
+    if (!asset) return;
+
+    const scrapOrder: ScrapOrder = {
+      id: `scrap_${generateId()}`,
+      assetId,
+      assetName: asset.name,
+      assetNo: asset.assetNo,
+      status: 'pending',
+      reason,
+      estimatedSalvageValue,
+      applicant: '张明',
+      applicantId: 'user_001',
+      applyDate: now.split('T')[0],
+    };
+
+    const newAssets = state.assets.map((a) =>
+      a.id === assetId ? { ...a, status: 'scrapping' as AssetStatus, updatedAt: now } : a
+    );
+
+    const newLogs = { ...state.assetLogs };
+    newLogs[assetId] = [
+      {
+        id: generateId(),
+        assetId,
+        action: '提交报废',
+        operator: '张明',
+        operatorId: 'user_001',
+        createdAt: now,
+        remark: `提交报废申请，原因：${reason}，预计残值：${estimatedSalvageValue}`,
+      },
+      ...(newLogs[assetId] || []),
+    ];
+
+    const newState = {
+      ...state,
+      scrapOrders: [scrapOrder, ...state.scrapOrders],
+      assets: newAssets,
+      assetLogs: newLogs,
+    };
+    saveData(newState);
+    set(newState);
+  },
+
+  approveScrapOrder: (id, remark) => {
+    const state = get();
+    const now = new Date().toISOString();
+    const order = state.scrapOrders.find((o) => o.id === id);
+
+    if (!order) return;
+
+    const newOrders = state.scrapOrders.map((o) =>
+      o.id === id
+        ? { ...o, status: 'approved' as const, approver: '张明', approveDate: now.split('T')[0], approveRemark: remark }
+        : o
+    );
+
+    const newAssets = state.assets.map((a) =>
+      a.id === order.assetId ? { ...a, status: 'scrapped' as AssetStatus, updatedAt: now } : a
+    );
+
+    const newLogs = { ...state.assetLogs };
+    newLogs[order.assetId] = [
+      {
+        id: generateId(),
+        assetId: order.assetId,
+        action: '报废批准',
+        operator: '张明',
+        operatorId: 'user_001',
+        createdAt: now,
+        remark: `报废申请已批准${remark ? `，备注：${remark}` : ''}`,
+      },
+      ...(newLogs[order.assetId] || []),
+    ];
+
+    const newState = {
+      ...state,
+      scrapOrders: newOrders,
+      assets: newAssets,
+      assetLogs: newLogs,
+    };
+    saveData(newState);
+    set(newState);
+  },
+
+  rejectScrapOrder: (id, remark) => {
+    const state = get();
+    const now = new Date().toISOString();
+    const order = state.scrapOrders.find((o) => o.id === id);
+
+    if (!order) return;
+
+    const newOrders = state.scrapOrders.map((o) =>
+      o.id === id
+        ? { ...o, status: 'rejected' as const, approver: '张明', approveDate: now.split('T')[0], approveRemark: remark }
+        : o
+    );
+
+    const newAssets = state.assets.map((a) =>
+      a.id === order.assetId ? { ...a, status: 'idle' as AssetStatus, updatedAt: now } : a
+    );
+
+    const newLogs = { ...state.assetLogs };
+    newLogs[order.assetId] = [
+      {
+        id: generateId(),
+        assetId: order.assetId,
+        action: '报废拒绝',
+        operator: '张明',
+        operatorId: 'user_001',
+        createdAt: now,
+        remark: `报废申请被拒绝，原因：${remark}`,
+      },
+      ...(newLogs[order.assetId] || []),
+    ];
+
+    const newState = {
+      ...state,
+      scrapOrders: newOrders,
+      assets: newAssets,
+      assetLogs: newLogs,
+    };
+    saveData(newState);
+    set(newState);
+  },
+
+  bulkSubmitScrap: (ids, reason, estimatedSalvageValue) => {
+    const state = get();
+    const now = new Date().toISOString();
+    const newScrapOrders: ScrapOrder[] = [];
+    let newAssets = [...state.assets];
+    const newLogs = { ...state.assetLogs };
+
+    ids.forEach((id) => {
+      const asset = state.assets.find((a) => a.id === id);
+      if (asset && asset.status !== 'scrapped' && asset.status !== 'scrapping') {
+        const scrapOrder: ScrapOrder = {
+          id: `scrap_${generateId()}`,
+          assetId: id,
+          assetName: asset.name,
+          assetNo: asset.assetNo,
+          status: 'pending',
+          reason,
+          estimatedSalvageValue,
+          applicant: '张明',
+          applicantId: 'user_001',
+          applyDate: now.split('T')[0],
+        };
+        newScrapOrders.push(scrapOrder);
+
+        newAssets = newAssets.map((a) =>
+          a.id === id ? { ...a, status: 'scrapping' as AssetStatus, updatedAt: now } : a
+        );
+
+        newLogs[id] = [
+          {
+            id: generateId(),
+            assetId: id,
+            action: '批量报废申请',
+            operator: '张明',
+            operatorId: 'user_001',
+            createdAt: now,
+            remark: `批量提交报废申请，原因：${reason}`,
+          },
+          ...(newLogs[id] || []),
+        ];
+      }
+    });
+
+    const newState = {
+      ...state,
+      scrapOrders: [...newScrapOrders, ...state.scrapOrders],
+      assets: newAssets,
+      selectedAssetIds: [],
+      assetLogs: newLogs,
+    };
+    saveData(newState);
+    set(newState);
+  },
+
+  createInventoryTask: (task) => {
+    const state = get();
+    const now = new Date().toISOString();
+
+    let totalAssets = 0;
+    if (task.departmentIds.length > 0) {
+      totalAssets = state.assets.filter(
+        (a) =>
+          task.departmentIds.includes(a.departmentId) &&
+          a.status !== 'scrapped' &&
+          a.status !== 'lost'
+      ).length;
+    } else {
+      totalAssets = state.assets.filter(
+        (a) => a.status !== 'scrapped' && a.status !== 'lost'
+      ).length;
+    }
+
+    const newTask: InventoryTask = {
+      ...task,
+      id: `it_${generateId()}`,
+      status: 'pending',
+      totalAssets,
+      checkedAssets: 0,
+      profitAssets: 0,
+      lossAssets: 0,
+    };
+
+    const records: InventoryRecord[] = [];
+    let assetsToCheck = state.assets.filter(
+      (a) => a.status !== 'scrapped' && a.status !== 'lost'
+    );
+    if (task.departmentIds.length > 0) {
+      assetsToCheck = assetsToCheck.filter((a) =>
+        task.departmentIds.includes(a.departmentId)
+      );
+    }
+
+    assetsToCheck.forEach((asset) => {
+      records.push({
+        id: `ir_${newTask.id}_${asset.id}`,
+        taskId: newTask.id,
+        assetId: asset.id,
+        assetName: asset.name,
+        assetNo: asset.assetNo,
+        status: 'normal',
+        checkedBy: '',
+        checkedAt: '',
+        remark: '',
+      });
+    });
+
+    const newState = {
+      ...state,
+      inventoryTasks: [newTask, ...state.inventoryTasks],
+      inventoryRecords: {
+        ...state.inventoryRecords,
+        [newTask.id]: records,
+      },
+    };
+    saveData(newState);
+    set(newState);
+    return newTask.id;
+  },
+
+  startInventoryTask: (id) => {
+    const state = get();
+    const now = new Date().toISOString();
+
+    const newTasks = state.inventoryTasks.map((t) =>
+      t.id === id ? { ...t, status: 'in_progress' as const, startDate: now.split('T')[0] } : t
+    );
+
+    const newState = { ...state, inventoryTasks: newTasks };
+    saveData(newState);
+    set(newState);
+  },
+
+  checkInventoryAsset: (taskId, assetNo) => {
+    const state = get();
+    const records = state.inventoryRecords[taskId] || [];
+    const task = state.inventoryTasks.find((t) => t.id === taskId);
+
+    if (!task) {
+      return { success: false, message: '盘点任务不存在' };
+    }
+
+    const record = records.find((r) => r.assetNo === assetNo);
+
+    if (!record) {
+      const newRecord: InventoryRecord = {
+        id: `ir_${taskId}_${generateId()}`,
+        taskId,
+        assetId: `profit_${generateId()}`,
+        assetName: `盘盈资产(${assetNo})`,
+        assetNo,
+        status: 'profit',
+        checkedBy: '张明',
+        checkedAt: new Date().toISOString(),
+        remark: '扫码发现未登记资产',
+      };
+
+      const newRecords = [...records, newRecord];
+      const newTasks = state.inventoryTasks.map((t) =>
+        t.id === taskId
+          ? {
+              ...t,
+              checkedAssets: t.checkedAssets + 1,
+              profitAssets: t.profitAssets + 1,
+            }
+          : t
+      );
+
+      const newState = {
+        ...state,
+        inventoryRecords: {
+          ...state.inventoryRecords,
+          [taskId]: newRecords,
+        },
+        inventoryTasks: newTasks,
+      };
+      saveData(newState);
+      set(newState);
+
+      return {
+        success: true,
+        message: `盘盈资产：${newRecord.assetName}`,
+        record: newRecord,
+      };
+    }
+
+    if (record.checkedAt) {
+      return { success: false, message: '该资产已盘点过' };
+    }
+
+    const now = new Date().toISOString();
+    const updatedRecord = { ...record, checkedBy: '张明', checkedAt: now };
+    const newRecords = records.map((r) => (r.id === record.id ? updatedRecord : r));
+    const newTasks = state.inventoryTasks.map((t) =>
+      t.id === taskId ? { ...t, checkedAssets: t.checkedAssets + 1 } : t
+    );
+
+    const newState = {
+      ...state,
+      inventoryRecords: {
+        ...state.inventoryRecords,
+        [taskId]: newRecords,
+      },
+      inventoryTasks: newTasks,
+    };
+    saveData(newState);
+    set(newState);
+
+    return {
+      success: true,
+      message: `盘点成功：${record.assetName}`,
+      record: updatedRecord,
+    };
+  },
+
+  completeInventoryTask: (id) => {
+    const state = get();
+    const now = new Date().toISOString();
+    const records = state.inventoryRecords[id] || [];
+
+    const profitCount = records.filter((r) => r.status === 'profit').length;
+    const lossCount = records.filter((r) => !r.checkedAt).length;
+
+    const updatedRecords = records.map((r) => {
+      if (!r.checkedAt) {
+        return { ...r, status: 'loss' as const, checkedBy: '系统', checkedAt: now, remark: '盘点未找到' };
+      }
+      return r;
+    });
+
+    const newTasks = state.inventoryTasks.map((t) =>
+      t.id === id
+        ? {
+            ...t,
+            status: 'completed' as const,
+            endDate: now.split('T')[0],
+            profitAssets: profitCount,
+            lossAssets: lossCount,
+            checkedAssets: t.totalAssets - lossCount + profitCount,
+          }
+        : t
+    );
+
+    const newState = {
+      ...state,
+      inventoryTasks: newTasks,
+      inventoryRecords: {
+        ...state.inventoryRecords,
+        [id]: updatedRecords,
+      },
+    };
+    saveData(newState);
+    set(newState);
+  },
+
+  getInventoryRecords: (taskId) => {
+    return get().inventoryRecords[taskId] || [];
+  },
+
   getFilteredAssets: () => {
     const { assets, filters, currentPage, pageSize } = get();
-    
+
     let filtered = [...assets];
-    
+
     if (filters.keyword) {
       const keyword = filters.keyword.toLowerCase();
       filtered = filtered.filter(
@@ -367,34 +1034,34 @@ export const useAssetStore = create<AssetState>((set, get) => ({
           a.location.toLowerCase().includes(keyword)
       );
     }
-    
+
     if (filters.status) {
       filtered = filtered.filter((a) => a.status === filters.status);
     }
-    
+
     if (filters.category) {
       filtered = filtered.filter((a) => a.category === filters.category);
     }
-    
+
     if (filters.departmentId) {
       filtered = filtered.filter((a) => a.departmentId === filters.departmentId);
     }
-    
+
     if (filters.userId) {
       filtered = filtered.filter((a) => a.userId === filters.userId);
     }
-    
+
     const total = filtered.length;
     const start = (currentPage - 1) * pageSize;
     const items = filtered.slice(start, start + pageSize);
-    
+
     return { items, total };
   },
-  
+
   getAssetById: (id) => {
     return get().assets.find((a) => a.id === id);
   },
-  
+
   getAssetStats: () => {
     const { assets } = get();
     const total = assets.length;
@@ -403,7 +1070,8 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     const inUseCount = assets.filter((a) => a.status === 'in_use').length;
     const maintenanceCount = assets.filter((a) => a.status === 'maintenance').length;
     const scrappedCount = assets.filter((a) => a.status === 'scrapped').length;
-    
+    const scrappingCount = assets.filter((a) => a.status === 'scrapping').length;
+
     return {
       total,
       totalValue,
@@ -411,6 +1079,7 @@ export const useAssetStore = create<AssetState>((set, get) => ({
       inUseCount,
       maintenanceCount,
       scrappedCount,
+      scrappingCount,
     };
   },
 }));

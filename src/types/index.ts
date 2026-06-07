@@ -1,4 +1,4 @@
-export type AssetStatus = 'idle' | 'in_use' | 'maintenance' | 'transferred' | 'scrapped' | 'lost';
+export type AssetStatus = 'idle' | 'in_use' | 'maintenance' | 'transferred' | 'scrapping' | 'scrapped' | 'lost';
 
 export type AssetCategory = 'computer' | 'furniture' | 'electronics' | 'vehicle' | 'other';
 
@@ -9,6 +9,17 @@ export type MaintenanceStatus = 'pending' | 'in_progress' | 'completed';
 export type TransferStatus = 'pending' | 'approved' | 'rejected' | 'completed';
 
 export type InventoryStatus = 'pending' | 'in_progress' | 'completed';
+
+export type ScrapStatus = 'pending' | 'approved' | 'rejected' | 'completed';
+
+export interface PurchaseVoucher {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  uploadTime: string;
+  dataUrl?: string;
+}
 
 export interface Asset {
   id: string;
@@ -27,6 +38,7 @@ export interface Asset {
   usefulLife: number;
   createdAt: string;
   updatedAt: string;
+  vouchers?: PurchaseVoucher[];
 }
 
 export interface Department {
@@ -134,11 +146,28 @@ export interface PaginatedResponse<T> {
   pageSize: number;
 }
 
+export interface ScrapOrder {
+  id: string;
+  assetId: string;
+  assetName: string;
+  assetNo: string;
+  status: ScrapStatus;
+  reason: string;
+  estimatedSalvageValue: number;
+  applicant: string;
+  applicantId: string;
+  applyDate: string;
+  approver?: string;
+  approveDate?: string;
+  approveRemark?: string;
+}
+
 export const statusMap: Record<AssetStatus, { label: string; className: string }> = {
   idle: { label: '闲置', className: 'badge-idle' },
   in_use: { label: '在用', className: 'badge-in-use' },
   maintenance: { label: '维修中', className: 'badge-maintenance' },
   transferred: { label: '调拨中', className: 'badge-transferred' },
+  scrapping: { label: '待报废', className: 'badge-scrapping' },
   scrapped: { label: '已报废', className: 'badge-scrapped' },
   lost: { label: '盘亏', className: 'badge-lost' },
 };

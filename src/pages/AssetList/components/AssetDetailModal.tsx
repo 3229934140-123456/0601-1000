@@ -1,10 +1,9 @@
-import { X, Calendar, MapPin, User, Building2, Tag, DollarSign, Clock, FileText, Wrench, ArrowLeftRight, Package } from 'lucide-react';
+import { X, Calendar, MapPin, User, Building2, Tag, DollarSign, Clock, FileText, Wrench, ArrowLeftRight, Package, Edit, FileImage, Download } from 'lucide-react';
 import { useAssetStore } from '@/store/useAssetStore';
 import { statusMap, categoryMap } from '@/types';
-import { formatCurrency, formatDate, formatDateTime } from '@/utils/format';
+import { formatCurrency, formatDate, formatDateTime, formatFileSize } from '@/utils/format';
 import { getDepartmentName, getUserName } from '@/data/users';
 import { calculateStraightLineDepreciation } from '@/utils/depreciation';
-import { generateAssetLogs } from '@/data/logs';
 
 interface AssetDetailModalProps {
   assetId: string;
@@ -13,6 +12,7 @@ interface AssetDetailModalProps {
 
 export default function AssetDetailModal({ assetId, onClose }: AssetDetailModalProps) {
   const asset = useAssetStore((state) => state.getAssetById(assetId));
+  const getLogs = useAssetStore((state) => state.getLogs);
 
   if (!asset) return null;
 
@@ -25,7 +25,19 @@ export default function AssetDetailModal({ assetId, onClose }: AssetDetailModalP
     purchaseDate: asset.purchaseDate,
   });
 
-  const logs = generateAssetLogs(asset.id, asset.name);
+  const logs = getLogs(asset.id);
+  const vouchers = asset.vouchers || [];
+
+  const handleDownloadVoucher = (voucher: any) => {
+    if (voucher.dataUrl) {
+      const link = document.createElement('a');
+      link.href = voucher.dataUrl;
+      link.download = voucher.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -141,6 +153,48 @@ export default function AssetDetailModal({ assetId, onClose }: AssetDetailModalP
 
             <div className="col-span-2">
               <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2 mb-3">
+                <FileText className="w-4 h-4 text-primary-600" />
+                购置凭证
+              </h3>
+              {vouchers.length > 0 ? (
+                <div className="space-y-2">
+                  {vouchers.map((voucher) => (
+                    <div
+                      key={voucher.id}
+                      className="flex items-center justify-between p-3 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        {voucher.type.startsWith('image/') ? (
+                          <FileImage className="w-5 h-5 text-primary-500" />
+                        ) : (
+                          <FileText className="w-5 h-5 text-slate-500" />
+                        )}
+                        <div>
+                          <p className="text-sm font-medium text-slate-900">{voucher.name}</p>
+                          <p className="text-xs text-slate-500">
+                            {formatFileSize(voucher.size)} · {formatDateTime(voucher.uploadTime)}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        className="p-1.5 hover:bg-slate-200 rounded text-slate-500 hover:text-primary-600 transition-colors"
+                        onClick={() => handleDownloadVoucher(voucher)}
+                        title="下载"
+                      >
+                        <Download className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500 bg-slate-50 rounded-lg p-4 text-center">
+                  暂无购置凭证
+                </p>
+              )}
+            </div>
+
+            <div className="col-span-2">
+              <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2 mb-3">
                 <Package className="w-4 h-4 text-primary-600" />
                 备注说明
               </h3>
@@ -155,33 +209,37 @@ export default function AssetDetailModal({ assetId, onClose }: AssetDetailModalP
                 操作日志
               </h3>
               <div className="space-y-3">
-                {logs.map((log, index) => (
-                  <div key={log.id} className="flex gap-3">
-                    <div className="flex flex-col items-center">
-                      <div className={`w-2 h-2 rounded-full ${
-                        index === 0 ? 'bg-primary-500' : 'bg-slate-300'
-                      }`}></div>
-                      {index < logs.length - 1 && (
-                        <div className="w-px flex-1 bg-slate-200 mt-1"></div>
-                      )}
-                    </div>
-                    <div className="flex-1 pb-4">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium text-slate-900">{log.action}</span>
-                        <span className="text-xs text-slate-500">{formatDateTime(log.createdAt)}</span>
+                {logs.length > 0 ? (
+                  logs.map((log, index) => (
+                    <div key={log.id} className="flex gap-3">
+                      <div className="flex flex-col items-center">
+                        <div className={`w-2 h-2 rounded-full ${
+                          index === 0 ? 'bg-primary-500' : 'bg-slate-300'
+                        }`}></div>
+                        {index < logs.length - 1 && (
+                          <div className="w-px flex-1 bg-slate-200 mt-1"></div>
+                        )}
                       </div>
-                      <p className="text-xs text-slate-500 mt-1">
-                        操作人：{log.operator}
-                        {log.remark && ` · ${log.remark}`}
-                      </p>
-                      {log.oldValue && log.newValue && (
+                      <div className="flex-1 pb-4">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium text-slate-900">{log.action}</span>
+                          <span className="text-xs text-slate-500">{formatDateTime(log.createdAt)}</span>
+                        </div>
                         <p className="text-xs text-slate-500 mt-1">
-                          {log.oldValue} → {log.newValue}
+                          操作人：{log.operator}
+                          {log.remark && ` · ${log.remark}`}
                         </p>
-                      )}
+                        {log.oldValue && log.newValue && (
+                          <p className="text-xs text-slate-500 mt-1">
+                            {log.oldValue} → {log.newValue}
+                          </p>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  <p className="text-sm text-slate-500 text-center py-4">暂无操作日志</p>
+                )}
               </div>
             </div>
           </div>

@@ -10,6 +10,7 @@ import {
   BarChart3,
   Settings,
   Building2,
+  Trash2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -20,6 +21,7 @@ const menuItems = [
   { path: '/transfer', label: '调拨申请', icon: ArrowLeftRight },
   { path: '/maintenance', label: '维修工单', icon: Wrench },
   { path: '/inventory', label: '盘点任务', icon: ClipboardList },
+  { path: '/scrap', label: '报废审批', icon: Trash2 },
   { path: '/reports', label: '报表中心', icon: BarChart3 },
 ];
 
