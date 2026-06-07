@@ -79,6 +79,8 @@ interface AssetState {
   checkInventoryAsset: (taskId: string, assetNo: string) => { success: boolean; message: string; record?: InventoryRecord };
   completeInventoryTask: (id: string) => void;
   getInventoryRecords: (taskId: string) => InventoryRecord[];
+  processInventoryProfit: (taskId: string, recordId: string, processType: 'ignore' | 'add_asset', assetData?: Partial<Asset>) => void;
+  processInventoryLoss: (taskId: string, recordId: string, processType: 'confirm_loss', remark?: string) => void;
 
   getFilteredAssets: () => { items: Asset[]; total: number };
   getAssetById: (id: string) => Asset | undefined;
@@ -452,9 +454,12 @@ export const useAssetStore = create<AssetState>((set, get) => ({
   addTransferOrder: (order) => {
     const state = get();
     const now = new Date().toISOString();
+    const asset = state.assets.find((a) => a.id === order.assetId);
     const newOrder: TransferOrder = {
       ...order,
       id: `to_${generateId()}`,
+      fromLocation: asset?.location,
+      originalStatus: asset?.status,
     };
 
     const newAssets = state.assets.map((a) =>
@@ -471,7 +476,7 @@ export const useAssetStore = create<AssetState>((set, get) => ({
           operator: order.applicant,
           operatorId: order.applicantId,
           createdAt: now,
-          remark: `调拨至${order.toDeptName}，原因：${order.reason}`,
+          remark: `调拨至${order.toDeptName}${order.toLocation ? `，存放位置：${order.toLocation}` : ''}，原因：${order.reason}`,
         },
         ...(newLogs[order.assetId] || []),
       ];
@@ -519,7 +524,8 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     if (updates.status === 'rejected') {
       newAssets = state.assets.map((a) => {
         if (a.id === order.assetId) {
-          return { ...a, status: 'idle' as AssetStatus, updatedAt: now };
+          const originalStatus = order.originalStatus || 'idle';
+          return { ...a, status: originalStatus as AssetStatus, updatedAt: now };
         }
         return a;
       });
@@ -531,7 +537,7 @@ export const useAssetStore = create<AssetState>((set, get) => ({
           operator: updates.approver || '张明',
           operatorId: 'user_001',
           createdAt: now,
-          remark: `调拨申请被拒绝，原因：${updates.approveRemark || '未填写'}`,
+          remark: `调拨申请被拒绝，原因：${updates.approveRemark || '未填写'}，资产恢复${order.originalStatus === 'in_use' ? '在用' : '闲置'}状态`,
         },
         ...(newLogs[order.assetId] || []),
       ];
@@ -543,7 +549,8 @@ export const useAssetStore = create<AssetState>((set, get) => ({
           ? {
               ...a,
               departmentId: order.toDeptId,
-              status: 'idle' as AssetStatus,
+              location: order.toLocation || a.location,
+              status: order.originalStatus === 'in_use' ? 'in_use' as AssetStatus : 'idle' as AssetStatus,
               updatedAt: now,
             }
           : a
@@ -558,7 +565,7 @@ export const useAssetStore = create<AssetState>((set, get) => ({
           createdAt: now,
           oldValue: order.fromDeptName,
           newValue: order.toDeptName,
-          remark: `资产从${order.fromDeptName}调拨至${order.toDeptName}`,
+          remark: `资产从${order.fromDeptName}调拨至${order.toDeptName}${order.toLocation ? `，存放位置：${order.toLocation}` : ''}`,
         },
         ...(newLogs[order.assetId] || []),
       ];
@@ -592,8 +599,10 @@ export const useAssetStore = create<AssetState>((set, get) => ({
           assetNo: asset.assetNo,
           fromDeptId: asset.departmentId,
           fromDeptName,
+          fromLocation: asset.location,
           toDeptId,
           toDeptName,
+          originalStatus: asset.status,
           status: 'pending',
           reason,
           applicant: '张明',
@@ -1018,6 +1027,139 @@ export const useAssetStore = create<AssetState>((set, get) => ({
 
   getInventoryRecords: (taskId) => {
     return get().inventoryRecords[taskId] || [];
+  },
+
+  processInventoryProfit: (taskId, recordId, processType, assetData) => {
+    const state = get();
+    const now = new Date().toISOString();
+    const records = state.inventoryRecords[taskId] || [];
+    const record = records.find((r) => r.id === recordId);
+
+    if (!record || record.status !== 'profit' || record.processed) return;
+
+    let newAssets = [...state.assets];
+    let newLogs = { ...state.assetLogs };
+    let newAssetId = '';
+
+    if (processType === 'add_asset' && assetData) {
+      const newAsset: Asset = {
+        id: `asset_${generateId()}`,
+        assetNo: assetData.assetNo || record.assetNo,
+        name: assetData.name || record.assetName,
+        category: (assetData.category as AssetCategory) || 'other',
+        status: 'idle',
+        value: assetData.value || 0,
+        purchaseDate: assetData.purchaseDate || now.split('T')[0],
+        departmentId: assetData.departmentId || 'dept_001',
+        userId: '',
+        location: assetData.location || '',
+        description: assetData.description || `盘盈资产，来源：盘点任务${taskId}`,
+        warrantyPeriod: assetData.warrantyPeriod || 12,
+        salvageValue: assetData.salvageValue || 0,
+        usefulLife: assetData.usefulLife || 5,
+        vouchers: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      newAssets = [newAsset, ...newAssets];
+      newAssetId = newAsset.id;
+
+      newLogs[newAsset.id] = [
+        {
+          id: generateId(),
+          assetId: newAsset.id,
+          action: '盘盈补录',
+          operator: '张明',
+          operatorId: 'user_001',
+          createdAt: now,
+          remark: `盘点任务盘盈补录，原资产编号：${record.assetNo}`,
+        },
+      ];
+    }
+
+    const updatedRecords = records.map((r) =>
+      r.id === recordId
+        ? {
+            ...r,
+            processed: true,
+            processType,
+            processRemark: processType === 'add_asset' ? '已补录为新资产' : '已忽略',
+            processedAt: now,
+            processedBy: '张明',
+          }
+        : r
+    );
+
+    const newState = {
+      ...state,
+      inventoryRecords: {
+        ...state.inventoryRecords,
+        [taskId]: updatedRecords,
+      },
+      assets: newAssets,
+      assetLogs: newLogs,
+    };
+    saveData(newState);
+    set(newState);
+  },
+
+  processInventoryLoss: (taskId, recordId, processType, remark) => {
+    const state = get();
+    const now = new Date().toISOString();
+    const records = state.inventoryRecords[taskId] || [];
+    const record = records.find((r) => r.id === recordId);
+
+    if (!record || record.status !== 'loss' || record.processed) return;
+
+    let newAssets = state.assets;
+    let newLogs = { ...state.assetLogs };
+
+    if (processType === 'confirm_loss') {
+      newAssets = state.assets.map((a) => {
+        if (a.id === record.assetId) {
+          return { ...a, status: 'lost' as AssetStatus, updatedAt: now };
+        }
+        return a;
+      });
+
+      newLogs[record.assetId] = [
+        {
+          id: generateId(),
+          assetId: record.assetId,
+          action: '确认盘亏',
+          operator: '张明',
+          operatorId: 'user_001',
+          createdAt: now,
+          remark: remark || '盘点确认盘亏',
+        },
+        ...(newLogs[record.assetId] || []),
+      ];
+    }
+
+    const updatedRecords = records.map((r) =>
+      r.id === recordId
+        ? {
+            ...r,
+            processed: true,
+            processType,
+            processRemark: remark || '已确认盘亏',
+            processedAt: now,
+            processedBy: '张明',
+          }
+        : r
+    );
+
+    const newState = {
+      ...state,
+      inventoryRecords: {
+        ...state.inventoryRecords,
+        [taskId]: updatedRecords,
+      },
+      assets: newAssets,
+      assetLogs: newLogs,
+    };
+    saveData(newState);
+    set(newState);
   },
 
   getFilteredAssets: () => {

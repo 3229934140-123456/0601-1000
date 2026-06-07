@@ -90,8 +90,11 @@ export interface TransferOrder {
   assetNo: string;
   fromDeptId: string;
   fromDeptName: string;
+  fromLocation?: string;
   toDeptId: string;
   toDeptName: string;
+  toLocation?: string;
+  originalStatus?: AssetStatus;
   status: TransferStatus;
   reason: string;
   applicant: string;
@@ -126,6 +129,11 @@ export interface InventoryRecord {
   checkedBy: string;
   checkedAt: string;
   remark?: string;
+  processed?: boolean;
+  processType?: 'ignore' | 'add_asset' | 'confirm_loss';
+  processRemark?: string;
+  processedAt?: string;
+  processedBy?: string;
 }
 
 export interface AssetFilter {

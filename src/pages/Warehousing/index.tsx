@@ -186,17 +186,30 @@ export default function Warehousing() {
           case 'category':
             const catMap: Record<string, string> = {
               '办公设备': 'computer',
-              '办公家具': 'furniture',
-              '电子设备': 'electronics',
-              '车辆': 'vehicle',
-              '其他': 'other',
+              '计算机': 'computer',
+              '电脑': 'computer',
               'computer': 'computer',
+              '办公家具': 'furniture',
+              '家具': 'furniture',
               'furniture': 'furniture',
+              '电子设备': 'electronics',
+              '电子': 'electronics',
               'electronics': 'electronics',
+              '车辆资产': 'vehicle',
+              '车辆': 'vehicle',
+              '汽车': 'vehicle',
               'vehicle': 'vehicle',
+              '其他': 'other',
+              '其它': 'other',
               'other': 'other',
             };
-            record.category = catMap[value] || 'other';
+            const mappedCat = catMap[value];
+            if (mappedCat) {
+              record.category = mappedCat;
+            } else if (value) {
+              record._status = '错误';
+              record._error = `不认识的资产分类：${value}，请使用：办公设备、办公家具、电子设备、车辆资产、其他`;
+            }
             break;
           case '价值':
           case '资产价值':
@@ -284,7 +297,7 @@ export default function Warehousing() {
   };
 
   const downloadTemplate = () => {
-    const template = '资产名称,分类,价值,购置日期,部门,存放位置,备注,保修期限,使用年限\n示例数据,计算机,5000,2024-01-01,行政部,A栋3层,办公使用,12,5\n示例数据2,办公家具,1500,2024-02-01,技术部,B栋2层,新采购,12,5\n';
+    const template = '资产名称,分类,价值,购置日期,部门,存放位置,备注,保修期限,使用年限\n联想ThinkPad笔记本,办公设备,5999,2024-01-15,技术部,A栋3楼302室,办公使用,12,5\n人体工学办公椅,办公家具,1299,2024-02-20,行政部,B栋2楼会议室,新采购,12,5\n无线蓝牙耳机,电子设备,899,2024-03-10,市场部,C栋1楼前台,办公配套,6,3\n商务接待用车,车辆资产,258000,2023-06-01,综合部,公司停车场,商务接待用,36,10\n打印一体机,办公设备,3599,2024-01-20,行政部,A栋1楼打印室,公共使用,12,5\n';
     const blob = new Blob(['\uFEFF' + template], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');

@@ -1,10 +1,11 @@
-import { useState } from 'react';
-import { X, Upload, Plus } from 'lucide-react';
+import { useState, useRef } from 'react';
+import { X, Upload, Plus, Trash2, FileImage, FileText } from 'lucide-react';
 import { useAssetStore } from '@/store/useAssetStore';
-import { AssetCategory, AssetStatus } from '@/types';
+import { AssetCategory, AssetStatus, PurchaseVoucher } from '@/types';
 import { categoryMap } from '@/types';
 import { departments } from '@/data/departments';
 import { users } from '@/data/users';
+import { formatFileSize } from '@/utils/format';
 
 interface AddAssetModalProps {
   onClose: () => void;
@@ -12,6 +13,9 @@ interface AddAssetModalProps {
 
 export default function AddAssetModal({ onClose }: AddAssetModalProps) {
   const addAsset = useAssetStore((state) => state.addAsset);
+  const addVoucher = useAssetStore((state) => state.addVoucher);
+  const voucherInputRef = useRef<HTMLInputElement>(null);
+
   const [formData, setFormData] = useState({
     name: '',
     category: 'computer' as AssetCategory,
@@ -27,17 +31,73 @@ export default function AddAssetModal({ onClose }: AddAssetModalProps) {
     usefulLife: 5,
   });
 
+  const [vouchers, setVouchers] = useState<PurchaseVoucher[]>([]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    addAsset({
+    if (!formData.name || formData.value <= 0) {
+      alert('请填写完整的资产信息');
+      return;
+    }
+    const id = addAsset({
       ...formData,
       salvageValue: Math.floor(formData.value * 0.05),
     });
+
+    vouchers.forEach((v) => {
+      addVoucher(id, {
+        name: v.name,
+        type: v.type,
+        size: v.size,
+        dataUrl: v.dataUrl,
+      });
+    });
+
     onClose();
   };
 
   const handleChange = (field: string, value: any) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleVoucherUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      Array.from(files).forEach((file) => {
+        if (file.size > 10 * 1024 * 1024) {
+          alert(`文件 ${file.name} 超过10MB限制`);
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const newVoucher: PurchaseVoucher = {
+            id: `temp_${Date.now()}_${Math.random()}`,
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            uploadTime: new Date().toISOString(),
+            dataUrl: event.target?.result as string,
+          };
+          setVouchers((prev) => [...prev, newVoucher]);
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+    if (voucherInputRef.current) {
+      voucherInputRef.current.value = '';
+    }
+  };
+
+  const removeVoucher = (id: string) => {
+    setVouchers((prev) => prev.filter((v) => v.id !== id));
+  };
+
+  const getFileIcon = (type: string) => {
+    if (type.startsWith('image/')) {
+      return <FileImage className="w-5 h-5 text-primary-500" />;
+    }
+    return <FileText className="w-5 h-5 text-slate-500" />;
   };
 
   return (
@@ -213,9 +273,7 @@ export default function AddAssetModal({ onClose }: AddAssetModalProps) {
                   <input
                     type="number"
                     className="input"
-                    value={formData.salvageValue}
-                    onChange={(e) => handleChange('salvageValue', Number(e.target.value))}
-                    min={0}
+                    value={Math.floor(formData.value * 0.05)}
                     disabled
                   />
                 </div>
@@ -224,11 +282,48 @@ export default function AddAssetModal({ onClose }: AddAssetModalProps) {
 
             <div>
               <h3 className="text-sm font-semibold text-slate-900 mb-4">购置凭证</h3>
-              <div className="border-2 border-dashed border-slate-300 rounded-lg p-8 text-center hover:border-primary-400 transition-colors cursor-pointer">
+              <input
+                type="file"
+                ref={voucherInputRef}
+                onChange={handleVoucherUpload}
+                multiple
+                accept="image/*,.pdf"
+                className="hidden"
+              />
+              <div
+                className="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center hover:border-primary-400 transition-colors cursor-pointer"
+                onClick={() => voucherInputRef.current?.click()}
+              >
                 <Upload className="w-10 h-10 text-slate-400 mx-auto mb-2" />
                 <p className="text-sm text-slate-600">点击或拖拽上传购置凭证</p>
-                <p className="text-xs text-slate-400 mt-1">支持 JPG、PNG、PDF 格式</p>
+                <p className="text-xs text-slate-400 mt-1">支持 JPG、PNG、PDF 格式，单文件不超过10MB</p>
               </div>
+
+              {vouchers.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {vouchers.map((voucher) => (
+                    <div
+                      key={voucher.id}
+                      className="flex items-center justify-between p-3 bg-slate-50 rounded-lg"
+                    >
+                      <div className="flex items-center gap-3">
+                        {getFileIcon(voucher.type)}
+                        <div>
+                          <p className="text-sm font-medium text-slate-900">{voucher.name}</p>
+                          <p className="text-xs text-slate-500">{formatFileSize(voucher.size)}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="p-1 hover:bg-slate-200 rounded transition-colors"
+                        onClick={() => removeVoucher(voucher.id)}
+                      >
+                        <Trash2 className="w-4 h-4 text-slate-500" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div>

@@ -45,7 +45,9 @@ export default function Transfer() {
     assetNo: '',
     fromDeptId: '',
     fromDeptName: '',
+    fromLocation: '',
     toDeptId: '',
+    toLocation: '',
     reason: '',
   });
 
@@ -124,6 +126,7 @@ export default function Transfer() {
       assetNo: asset.assetNo,
       fromDeptId: asset.departmentId,
       fromDeptName: deptName,
+      fromLocation: asset.location || '',
     });
     setShowAssetSelector(false);
     setAssetSearch('');
@@ -141,8 +144,10 @@ export default function Transfer() {
       assetNo: applyForm.assetNo,
       fromDeptId: applyForm.fromDeptId,
       fromDeptName: applyForm.fromDeptName,
+      fromLocation: applyForm.fromLocation,
       toDeptId: applyForm.toDeptId,
       toDeptName: toDept?.name || '',
+      toLocation: applyForm.toLocation,
       status: 'pending',
       reason: applyForm.reason,
       applicant: '张明',
@@ -156,7 +161,9 @@ export default function Transfer() {
       assetNo: '',
       fromDeptId: '',
       fromDeptName: '',
+      fromLocation: '',
       toDeptId: '',
+      toLocation: '',
       reason: '',
     });
     alert('调拨申请提交成功！');
@@ -478,6 +485,20 @@ export default function Transfer() {
                 </div>
               )}
 
+              {applyForm.fromLocation && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    原存放位置
+                  </label>
+                  <div className="p-3 bg-slate-50 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-slate-400" />
+                      <span className="text-sm text-slate-700">{applyForm.fromLocation}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
                   调入部门 <span className="text-danger-500">*</span>
@@ -492,6 +513,19 @@ export default function Transfer() {
                     <option key={dept.id} value={dept.id}>{dept.name}</option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  调入后存放位置
+                </label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="请输入调入后的存放位置"
+                  value={applyForm.toLocation}
+                  onChange={(e) => setApplyForm({ ...applyForm, toLocation: e.target.value })}
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">

@@ -18,10 +18,13 @@ import {
   X,
   Check,
   Download,
+  Package,
+  AlertTriangle,
 } from 'lucide-react';
 import { useAssetStore } from '@/store/useAssetStore';
 import { departments } from '@/data/departments';
-import { InventoryTask, InventoryRecord } from '@/types';
+import { InventoryTask, InventoryRecord, AssetCategory } from '@/types';
+import { categoryMap } from '@/types';
 import { formatDateTime } from '@/utils/format';
 import { exportInventoryReport } from '@/utils/export';
 
@@ -34,6 +37,17 @@ export default function Inventory() {
   const [recordTab, setRecordTab] = useState<'all' | 'normal' | 'profit' | 'loss'>('all');
   const [scanInput, setScanInput] = useState('');
   const [scanResult, setScanResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [showProfitModal, setShowProfitModal] = useState(false);
+  const [showLossModal, setShowLossModal] = useState(false);
+  const [selectedRecord, setSelectedRecord] = useState<InventoryRecord | null>(null);
+  const [profitForm, setProfitForm] = useState({
+    name: '',
+    category: 'other' as AssetCategory,
+    value: 0,
+    departmentId: 'dept_001',
+    location: '',
+    description: '',
+  });
 
   const inventoryTasks = useAssetStore((state) => state.inventoryTasks);
   const createInventoryTask = useAssetStore((state) => state.createInventoryTask);
@@ -41,6 +55,8 @@ export default function Inventory() {
   const checkInventoryAsset = useAssetStore((state) => state.checkInventoryAsset);
   const completeInventoryTask = useAssetStore((state) => state.completeInventoryTask);
   const getInventoryRecords = useAssetStore((state) => state.getInventoryRecords);
+  const processInventoryProfit = useAssetStore((state) => state.processInventoryProfit);
+  const processInventoryLoss = useAssetStore((state) => state.processInventoryLoss);
 
   const [createForm, setCreateForm] = useState({
     name: '',
@@ -172,9 +188,11 @@ export default function Inventory() {
   const inProgressCount = stats.inProgress;
   const completedCount = stats.completed;
 
-  const handleExportReport = () => {
-    if (selectedTask) {
-      exportInventoryReport(selectedTask.name, records, `盘点报告_${selectedTask.name}_${new Date().toISOString().split('T')[0]}.csv`);
+  const handleExportReport = (task?: InventoryTask) => {
+    const targetTask = task || selectedTask;
+    if (targetTask) {
+      const taskRecords = getInventoryRecords(targetTask.id);
+      exportInventoryReport(targetTask.name, taskRecords, `盘点报告_${targetTask.name}_${new Date().toISOString().split('T')[0]}.csv`);
     }
   };
 
@@ -388,7 +406,10 @@ export default function Inventory() {
                   {task.status === 'completed' && (
                     <button
                       className="btn-secondary text-xs py-1.5 px-3"
-                      onClick={handleExportReport}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleExportReport(task);
+                      }}
                     >
                       <Download className="w-3 h-3 mr-1" />
                       导出报告
@@ -497,7 +518,7 @@ export default function Inventory() {
               </div>
               <div className="flex items-center gap-2">
                 {selectedTask.status === 'completed' && (
-                  <button className="btn-secondary btn-sm" onClick={handleExportReport}>
+                  <button className="btn-secondary btn-sm" onClick={() => handleExportReport()}>
                     <Download className="w-4 h-4 mr-1" />
                     导出报告
                   </button>
@@ -565,6 +586,7 @@ export default function Inventory() {
                     <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">盘点人</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">盘点时间</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">备注</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -577,7 +599,57 @@ export default function Inventory() {
                       <td className="px-4 py-3 text-sm text-slate-500">
                         {record.checkedAt ? formatDateTime(record.checkedAt) : '-'}
                       </td>
-                      <td className="px-4 py-3 text-sm text-slate-500">{record.remark || '-'}</td>
+                      <td className="px-4 py-3 text-sm text-slate-500">
+                        {record.processed ? record.processRemark : (record.remark || '-')}
+                      </td>
+                      <td className="px-4 py-3">
+                        {record.status === 'profit' && !record.processed && selectedTask && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              className="text-xs text-primary-600 hover:text-primary-700"
+                              onClick={() => {
+                                setSelectedRecord(record);
+                                setProfitForm({
+                                  name: record.assetName,
+                                  category: 'other',
+                                  value: 0,
+                                  departmentId: 'dept_001',
+                                  location: '',
+                                  description: `盘盈资产，原编号：${record.assetNo}`,
+                                });
+                                setShowProfitModal(true);
+                              }}
+                            >
+                              补录资产
+                            </button>
+                            <button
+                              className="text-xs text-slate-600 hover:text-slate-700"
+                              onClick={() => {
+                                if (confirm('确认标记为忽略吗？')) {
+                                  processInventoryProfit(selectedTask.id, record.id, 'ignore');
+                                  setSelectedTask({ ...selectedTask });
+                                }
+                              }}
+                            >
+                              忽略
+                            </button>
+                          </div>
+                        )}
+                        {record.status === 'loss' && !record.processed && selectedTask && (
+                          <button
+                            className="text-xs text-danger-600 hover:text-danger-700"
+                            onClick={() => {
+                              setSelectedRecord(record);
+                              setShowLossModal(true);
+                            }}
+                          >
+                            确认盘亏
+                          </button>
+                        )}
+                        {record.processed && (
+                          <span className="text-xs text-slate-400">已处理</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -700,6 +772,223 @@ export default function Inventory() {
               >
                 <CheckCircle className="w-4 h-4 mr-2" />
                 完成盘点
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showProfitModal && selectedRecord && selectedTask && (
+        <div className="modal-overlay" onClick={() => setShowProfitModal(false)}>
+          <div
+            className="modal-content max-w-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">盘盈资产补录</h2>
+                <p className="text-sm text-slate-500 mt-1">将盘盈资产登记为正式资产</p>
+              </div>
+              <button
+                className="p-2 hover:bg-slate-100 rounded-lg"
+                onClick={() => setShowProfitModal(false)}
+              >
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="p-4 bg-primary-50 rounded-lg flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-primary-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-primary-900">原盘点信息</p>
+                  <p className="text-xs text-primary-700 mt-1">
+                    资产编号：{selectedRecord.assetNo}
+                  </p>
+                  <p className="text-xs text-primary-700">
+                    资产名称：{selectedRecord.assetName}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  资产名称 <span className="text-danger-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  className="input"
+                  value={profitForm.name}
+                  onChange={(e) => setProfitForm({ ...profitForm, name: e.target.value })}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    资产分类 <span className="text-danger-500">*</span>
+                  </label>
+                  <select
+                    className="select"
+                    value={profitForm.category}
+                    onChange={(e) => setProfitForm({ ...profitForm, category: e.target.value as AssetCategory })}
+                  >
+                    {Object.entries(categoryMap).map(([key, val]) => (
+                      <option key={key} value={key}>{val.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    资产价值（元）
+                  </label>
+                  <input
+                    type="number"
+                    className="input"
+                    value={profitForm.value}
+                    onChange={(e) => setProfitForm({ ...profitForm, value: Number(e.target.value) })}
+                    min={0}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    所属部门
+                  </label>
+                  <select
+                    className="select"
+                    value={profitForm.departmentId}
+                    onChange={(e) => setProfitForm({ ...profitForm, departmentId: e.target.value })}
+                  >
+                    {departments.map((dept) => (
+                      <option key={dept.id} value={dept.id}>{dept.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    存放位置
+                  </label>
+                  <input
+                    type="text"
+                    className="input"
+                    value={profitForm.location}
+                    onChange={(e) => setProfitForm({ ...profitForm, location: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  备注说明
+                </label>
+                <textarea
+                  className="input min-h-[80px] resize-none"
+                  value={profitForm.description}
+                  onChange={(e) => setProfitForm({ ...profitForm, description: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="p-6 border-t border-slate-200 flex justify-end gap-3">
+              <button
+                className="btn-secondary"
+                onClick={() => setShowProfitModal(false)}
+              >
+                取消
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  if (!profitForm.name) {
+                    alert('请填写资产名称');
+                    return;
+                  }
+                  processInventoryProfit(selectedTask.id, selectedRecord.id, 'add_asset', {
+                    ...profitForm,
+                    assetNo: selectedRecord.assetNo,
+                  });
+                  setShowProfitModal(false);
+                  setSelectedTask({ ...selectedTask });
+                  alert('盘盈资产补录成功！');
+                }}
+              >
+                <Package className="w-4 h-4 mr-2" />
+                确认补录
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showLossModal && selectedRecord && selectedTask && (
+        <div className="modal-overlay" onClick={() => setShowLossModal(false)}>
+          <div
+            className="modal-content max-w-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">确认盘亏</h2>
+                <p className="text-sm text-slate-500 mt-1">确认该资产盘亏后将标记为丢失状态</p>
+              </div>
+              <button
+                className="p-2 hover:bg-slate-100 rounded-lg"
+                onClick={() => setShowLossModal(false)}
+              >
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="p-4 bg-danger-50 rounded-lg">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-danger-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-medium text-danger-900">确认盘亏资产</p>
+                    <p className="text-xs text-danger-700 mt-1">
+                      资产编号：{selectedRecord.assetNo}
+                    </p>
+                    <p className="text-xs text-danger-700">
+                      资产名称：{selectedRecord.assetName}
+                    </p>
+                    <p className="text-xs text-danger-700 mt-2">
+                      确认后资产状态将变更为「丢失」，此操作不可撤销。
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  盘亏原因
+                </label>
+                <textarea
+                  className="input min-h-[80px] resize-none"
+                  placeholder="请输入盘亏原因..."
+                  id="lossRemark"
+                />
+              </div>
+            </div>
+            <div className="p-6 border-t border-slate-200 flex justify-end gap-3">
+              <button
+                className="btn-secondary"
+                onClick={() => setShowLossModal(false)}
+              >
+                取消
+              </button>
+              <button
+                className="btn-danger"
+                onClick={() => {
+                  const remarkInput = document.getElementById('lossRemark') as HTMLTextAreaElement;
+                  const remark = remarkInput?.value || '';
+                  processInventoryLoss(selectedTask.id, selectedRecord.id, 'confirm_loss', remark);
+                  setShowLossModal(false);
+                  setSelectedTask({ ...selectedTask });
+                  alert('已确认盘亏');
+                }}
+              >
+                <CheckCircle className="w-4 h-4 mr-2" />
+                确认盘亏
               </button>
             </div>
           </div>
