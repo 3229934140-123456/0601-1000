@@ -38,6 +38,10 @@ interface ImportRecord {
   _rowNum: number;
   _rawCategory: string;
   _rawDepartment: string;
+  _mappedCategory?: string;
+  _mappedDepartment?: string;
+  _categoryError?: boolean;
+  _departmentError?: boolean;
 }
 
 export default function Warehousing() {
@@ -215,7 +219,8 @@ export default function Warehousing() {
               record.category = mappedCat;
             } else if (value) {
               record._status = '错误';
-              record._error = `不认识的资产分类：${value}，请使用：办公设备、办公家具、电子设备、车辆资产、其他`;
+              record._categoryError = true;
+              record._error = `不认识的资产分类：${value}`;
             }
             break;
           case '价值':
@@ -237,7 +242,8 @@ export default function Warehousing() {
               record.departmentId = dept.id;
             } else if (value) {
               record._status = '错误';
-              record._error = `不认识的部门：${value}，请使用正确的部门名称`;
+              record._departmentError = true;
+              record._error = `不认识的部门：${value}`;
             }
             break;
           case '位置':
@@ -752,16 +758,97 @@ export default function Warehousing() {
                             <td className="table-cell text-xs">{item._rowNum}</td>
                             <td className="table-cell text-xs">{item.name}</td>
                             <td className="table-cell text-xs">
-                              {
+                              {item._categoryError ? (
+                                <div className="flex items-center gap-2">
+                                  <select
+                                    className="select text-xs py-1 px-2 h-8 w-32"
+                                    value={item._mappedCategory || ''}
+                                    onChange={(e) => {
+                                      const newValue = e.target.value;
+                                      setImportPreview((prev) =>
+                                        prev.map((r) => {
+                                          if (r._rowNum === item._rowNum) {
+                                            const updated = { ...r, _mappedCategory: newValue };
+                                            const otherError = r._departmentError && !r._mappedDepartment;
+                                            if (newValue && !otherError) {
+                                              updated._status = '正常';
+                                              updated._error = '';
+                                              updated.category = newValue;
+                                            } else if (newValue) {
+                                              updated.category = newValue;
+                                              const deptName = departments.find(
+                                                (d) => d.id === r._mappedDepartment
+                                              )?.name;
+                                              updated._error = `不认识的部门：${r._rawDepartment}`;
+                                            }
+                                            return updated;
+                                          }
+                                          return r;
+                                        })
+                                      );
+                                    }}
+                                  >
+                                    <option value="">请选择映射分类</option>
+                                    {Object.entries(categoryMap).map(([key, val]) => (
+                                      <option key={key} value={key}>
+                                        {(val as { label: string }).label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <span className="text-xs text-primary-600 whitespace-nowrap">
+                                    (原: {item._rawCategory})
+                                  </span>
+                                </div>
+                              ) : (
                                 categoryMap[item.category as keyof typeof categoryMap]
                                   ?.label || item._rawCategory || item.category
-                              }
+                              )}
                             </td>
                             <td className="table-cell text-xs">{formatCurrency(item.value)}</td>
                             <td className="table-cell text-xs">{formatDate(item.purchaseDate)}</td>
                             <td className="table-cell text-xs">
-                              {departments.find((d) => d.id === item.departmentId)?.name ||
-                                item._rawDepartment || '未指定'}
+                              {item._departmentError ? (
+                                <div className="flex items-center gap-2">
+                                  <select
+                                    className="select text-xs py-1 px-2 h-8 w-32"
+                                    value={item._mappedDepartment || ''}
+                                    onChange={(e) => {
+                                      const newValue = e.target.value;
+                                      setImportPreview((prev) =>
+                                        prev.map((r) => {
+                                          if (r._rowNum === item._rowNum) {
+                                            const updated = { ...r, _mappedDepartment: newValue };
+                                            const otherError = r._categoryError && !r._mappedCategory;
+                                            if (newValue && !otherError) {
+                                              updated._status = '正常';
+                                              updated._error = '';
+                                              updated.departmentId = newValue;
+                                            } else if (newValue) {
+                                              updated.departmentId = newValue;
+                                              updated._error = `不认识的资产分类：${r._rawCategory}`;
+                                            }
+                                            return updated;
+                                          }
+                                          return r;
+                                        })
+                                      );
+                                    }}
+                                  >
+                                    <option value="">请选择映射部门</option>
+                                    {departments.map((d) => (
+                                      <option key={d.id} value={d.id}>
+                                        {d.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <span className="text-xs text-primary-600 whitespace-nowrap">
+                                    (原: {item._rawDepartment})
+                                  </span>
+                                </div>
+                              ) : (
+                                departments.find((d) => d.id === item.departmentId)?.name ||
+                                  item._rawDepartment || '未指定'
+                              )}
                             </td>
                             <td className="table-cell text-xs">{item.location || '-'}</td>
                             <td className="table-cell text-xs">

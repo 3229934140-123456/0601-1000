@@ -14,6 +14,7 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   Minus,
+  X,
 } from 'lucide-react';
 import {
   BarChart,
@@ -50,6 +51,8 @@ const CHART_COLORS = ['#1e3a5f', '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd', '#b
 export default function Reports() {
   const [activeTab, setActiveTab] = useState<'overview' | 'category' | 'department' | 'depreciation' | 'maintenance'>('overview');
   const [timeRange, setTimeRange] = useState<'month' | 'quarter' | 'year'>('year');
+  const [showInventoryModal, setShowInventoryModal] = useState(false);
+  const [selectedInventoryTask, setSelectedInventoryTask] = useState('');
 
   const assets = useAssetStore((state) => state.assets);
   const maintenanceOrders = useAssetStore((state) => state.maintenanceOrders);
@@ -153,14 +156,7 @@ export default function Reports() {
         exportMaintenanceOrders(maintenanceOrders, `维修工单_${dateStr}.csv`);
         break;
       case '盘点报告': {
-        const completedTasks = inventoryTasks.filter((t) => t.status === 'completed');
-        if (completedTasks.length === 0) {
-          alert('暂无已完成的盘点任务');
-          return;
-        }
-        const latestTask = completedTasks[0];
-        const records = getInventoryRecords(latestTask.id);
-        exportInventoryReport(latestTask.name, records, `盘点报告_${latestTask.name}_${dateStr}.csv`);
+        setShowInventoryModal(true);
         break;
       }
       case '调拨记录':
@@ -689,6 +685,110 @@ export default function Reports() {
           </div>
         </div>
       </div>
+
+      {showInventoryModal && (
+        <div className="modal-overlay" onClick={() => setShowInventoryModal(false)}>
+          <div
+            className="modal-content max-w-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-slate-900">导出盘点报告</h2>
+              <button
+                className="text-slate-400 hover:text-slate-600"
+                onClick={() => setShowInventoryModal(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  选择盘点任务 <span className="text-danger-500">*</span>
+                </label>
+                <select
+                  className="select w-full"
+                  value={selectedInventoryTask}
+                  onChange={(e) => setSelectedInventoryTask(e.target.value)}
+                >
+                  <option value="">请选择盘点任务</option>
+                  {inventoryTasks.map((task) => (
+                    <option key={task.id} value={task.id}>
+                      {task.name} ({task.status === 'completed' ? '已完成' : '进行中'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedInventoryTask && (
+                <div className="bg-slate-50 rounded-lg p-4">
+                  <h4 className="text-sm font-medium text-slate-700 mb-3">任务概览</h4>
+                  <div className="grid grid-cols-4 gap-3 text-xs">
+                    <div>
+                      <p className="text-slate-500 mb-1">资产总数</p>
+                      <p className="text-base font-semibold text-slate-900">
+                        {inventoryTasks.find((t) => t.id === selectedInventoryTask)?.totalAssets || 0}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 mb-1">正常</p>
+                      <p className="text-base font-semibold text-success-600">
+                        {(() => {
+                          const task = inventoryTasks.find((t) => t.id === selectedInventoryTask);
+                          if (!task) return 0;
+                          const records = getInventoryRecords(task.id);
+                          return records.filter((r) => r.status === 'normal').length;
+                        })()}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 mb-1">盘盈</p>
+                      <p className="text-base font-semibold text-primary-600">
+                        {inventoryTasks.find((t) => t.id === selectedInventoryTask)?.profitAssets || 0}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 mb-1">盘亏</p>
+                      <p className="text-base font-semibold text-danger-600">
+                        {inventoryTasks.find((t) => t.id === selectedInventoryTask)?.lossAssets || 0}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="text-xs text-slate-500 bg-primary-50 rounded-lg p-3">
+                <p>• 导出的报告包含汇总区和明细区两部分</p>
+                <p>• 汇总区显示总数、正常、盘盈、盘亏、已处理、未处理统计</p>
+                <p>• 明细区显示每条盘点记录的详细信息和处理状态</p>
+              </div>
+            </div>
+            <div className="p-6 border-t border-slate-200 flex justify-end gap-3">
+              <button
+                className="btn-secondary"
+                onClick={() => setShowInventoryModal(false)}
+              >
+                取消
+              </button>
+              <button
+                className="btn-primary"
+                disabled={!selectedInventoryTask}
+                onClick={() => {
+                  const task = inventoryTasks.find((t) => t.id === selectedInventoryTask);
+                  if (!task) return;
+                  const records = getInventoryRecords(task.id);
+                  const dateStr = new Date().toISOString().split('T')[0];
+                  exportInventoryReport(task.name, records, `盘点报告_${task.name}_${dateStr}.csv`);
+                  setShowInventoryModal(false);
+                }}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                确认导出
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

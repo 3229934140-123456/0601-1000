@@ -29,7 +29,7 @@ import { formatDateTime } from '@/utils/format';
 import { exportInventoryReport } from '@/utils/export';
 
 export default function Inventory() {
-  const [activeTab, setActiveTab] = useState<'in_progress' | 'completed'>('in_progress');
+  const [activeTab, setActiveTab] = useState<'in_progress' | 'completed' | 'abnormal'>('in_progress');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
@@ -48,8 +48,14 @@ export default function Inventory() {
     location: '',
     description: '',
   });
+  const [abnormalFilters, setAbnormalFilters] = useState({
+    taskId: '',
+    status: 'all' as 'all' | 'profit' | 'loss',
+    processed: 'all' as 'all' | 'pending' | 'processed',
+  });
 
   const inventoryTasks = useAssetStore((state) => state.inventoryTasks);
+  const inventoryRecords = useAssetStore((state) => state.inventoryRecords);
   const createInventoryTask = useAssetStore((state) => state.createInventoryTask);
   const startInventoryTask = useAssetStore((state) => state.startInventoryTask);
   const checkInventoryAsset = useAssetStore((state) => state.checkInventoryAsset);
@@ -77,6 +83,36 @@ export default function Inventory() {
     inProgress: inventoryTasks.filter((t) => t.status === 'in_progress' || t.status === 'pending').length,
     completed: inventoryTasks.filter((t) => t.status === 'completed').length,
     total: inventoryTasks.length,
+  };
+
+  const allAbnormalRecords = useMemo(() => {
+    const result: Array<InventoryRecord & { taskName: string; taskStatus: string }> = [];
+    inventoryTasks.forEach((task) => {
+      const taskRecords = getInventoryRecords(task.id);
+      taskRecords
+        .filter((r) => r.status === 'profit' || r.status === 'loss')
+        .forEach((r) => {
+          result.push({ ...r, taskName: task.name, taskStatus: task.status });
+        });
+    });
+    return result;
+  }, [inventoryTasks, inventoryRecords, getInventoryRecords]);
+
+  const filteredAbnormalRecords = useMemo(() => {
+    return allAbnormalRecords.filter((r) => {
+      if (abnormalFilters.taskId && r.taskId !== abnormalFilters.taskId) return false;
+      if (abnormalFilters.status !== 'all' && r.status !== abnormalFilters.status) return false;
+      if (abnormalFilters.processed === 'pending' && r.processed) return false;
+      if (abnormalFilters.processed === 'processed' && !r.processed) return false;
+      return true;
+    });
+  }, [allAbnormalRecords, abnormalFilters]);
+
+  const abnormalStats = {
+    total: allAbnormalRecords.length,
+    pending: allAbnormalRecords.filter((r) => !r.processed).length,
+    profit: allAbnormalRecords.filter((r) => r.status === 'profit').length,
+    loss: allAbnormalRecords.filter((r) => r.status === 'loss').length,
   };
 
   const getStatusBadge = (status: string) => {
@@ -187,6 +223,7 @@ export default function Inventory() {
 
   const inProgressCount = stats.inProgress;
   const completedCount = stats.completed;
+  const abnormalCount = abnormalStats.pending;
 
   const handleExportReport = (task?: InventoryTask) => {
     const targetTask = task || selectedTask;
@@ -262,6 +299,7 @@ export default function Inventory() {
             {[
               { key: 'in_progress', label: '进行中', count: inProgressCount },
               { key: 'completed', label: '已完成', count: completedCount },
+              { key: 'abnormal', label: '异常处理', count: abnormalCount },
             ].map((tab) => (
               <button
                 key={tab.key}
@@ -283,156 +321,321 @@ export default function Inventory() {
           </div>
         </div>
 
-        <div className="p-4 border-b border-slate-100">
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1 max-w-md">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="搜索盘点任务名称..."
-                className="input pl-9"
-              />
+        {activeTab !== 'abnormal' && (
+          <div className="p-4 border-b border-slate-100">
+            <div className="flex items-center gap-3">
+              <div className="relative flex-1 max-w-md">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="搜索盘点任务名称..."
+                  className="input pl-9"
+                />
+              </div>
+              <select className="select w-40">
+                <option value="">全部部门</option>
+                {departments.map((dept) => (
+                  <option key={dept.id} value={dept.id}>{dept.name}</option>
+                ))}
+              </select>
+              <button className="btn-ghost">
+                <Filter className="w-4 h-4 mr-2" />
+                更多筛选
+              </button>
             </div>
-            <select className="select w-40">
-              <option value="">全部部门</option>
-              {departments.map((dept) => (
-                <option key={dept.id} value={dept.id}>{dept.name}</option>
-              ))}
-            </select>
-            <button className="btn-ghost">
-              <Filter className="w-4 h-4 mr-2" />
-              更多筛选
-            </button>
           </div>
-        </div>
+        )}
 
-        <div className="divide-y divide-slate-100">
-          {filteredTasks.map((task) => (
-            <div key={task.id} className="p-5 hover:bg-slate-50 transition-colors">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-3">
-                    <h3 className="font-medium text-slate-900">{task.name}</h3>
-                    {getStatusBadge(task.status)}
-                  </div>
-
-                  <div className="grid grid-cols-4 gap-4 mb-3">
-                    <div>
-                      <p className="text-xs text-slate-500 mb-1">盘点资产数</p>
-                      <p className="text-lg font-semibold text-slate-900">{task.totalAssets}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-500 mb-1">已盘点</p>
-                      <p className="text-lg font-semibold text-primary-600">{task.checkedAssets}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-500 mb-1">盘盈</p>
-                      <p className="text-lg font-semibold text-success-600">{task.profitAssets}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-slate-500 mb-1">盘亏</p>
-                      <p className="text-lg font-semibold text-danger-600">{task.lossAssets}</p>
-                    </div>
-                  </div>
-
-                  {task.status === 'in_progress' && task.totalAssets > 0 && (
-                    <div className="mb-3">
-                      <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-                        <span>盘点进度</span>
-                        <span>{Math.round((task.checkedAssets / task.totalAssets) * 100)}%</span>
-                      </div>
-                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-primary-500 rounded-full transition-all"
-                          style={{ width: `${(task.checkedAssets / task.totalAssets) * 100}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-6 text-xs text-slate-500">
-                    <div className="flex items-center gap-1.5">
-                      <User className="w-3.5 h-3.5" />
-                      <span>创建人：{task.creator}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <Calendar className="w-3.5 h-3.5" />
-                      <span>开始：{task.startDate}</span>
-                    </div>
-                    {task.endDate && (
-                      <div className="flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5" />
-                        <span>完成：{task.endDate}</span>
-                      </div>
-                    )}
-                    <div className="flex items-center gap-1.5">
-                      <Building2 className="w-3.5 h-3.5" />
-                      <span>涉及 {task.departmentIds.length} 个部门</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {task.status === 'pending' && (
-                    <button
-                      className="btn-primary text-xs py-1.5 px-3"
-                      onClick={() => handleStartTask(task.id)}
-                    >
-                      <Play className="w-3 h-3 mr-1" />
-                      开始
-                    </button>
-                  )}
-                  {task.status === 'in_progress' && (
-                    <>
-                      <button
-                        className="btn-ghost text-xs py-1.5 px-3"
-                        onClick={() => {
-                          setSelectedTask(task);
-                          setShowScanModal(true);
-                        }}
-                      >
-                        <Scan className="w-3 h-3 mr-1" />
-                        扫码盘点
-                      </button>
-                      <button
-                        className="btn-success text-xs py-1.5 px-3"
-                        onClick={() => handleCompleteTask(task.id)}
-                      >
-                        <CheckCircle className="w-3 h-3 mr-1" />
-                        完成
-                      </button>
-                    </>
-                  )}
-                  {task.status === 'completed' && (
-                    <button
-                      className="btn-secondary text-xs py-1.5 px-3"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleExportReport(task);
-                      }}
-                    >
-                      <Download className="w-3 h-3 mr-1" />
-                      导出报告
-                    </button>
-                  )}
-                  <button
-                    className="btn-ghost text-xs py-1.5 px-3"
-                    onClick={() => handleViewDetail(task)}
-                  >
-                    <Eye className="w-3 h-3 mr-1" />
-                    详情
-                  </button>
-                </div>
+        {activeTab === 'abnormal' && (
+          <div className="p-4 border-b border-slate-100">
+            <div className="flex items-center gap-3">
+              <select
+                className="select w-48"
+                value={abnormalFilters.taskId}
+                onChange={(e) => setAbnormalFilters({ ...abnormalFilters, taskId: e.target.value })}
+              >
+                <option value="">全部盘点任务</option>
+                {inventoryTasks.map((task) => (
+                  <option key={task.id} value={task.id}>{task.name}</option>
+                ))}
+              </select>
+              <select
+                className="select w-36"
+                value={abnormalFilters.status}
+                onChange={(e) => setAbnormalFilters({ ...abnormalFilters, status: e.target.value as any })}
+              >
+                <option value="all">全部异常类型</option>
+                <option value="profit">盘盈</option>
+                <option value="loss">盘亏</option>
+              </select>
+              <select
+                className="select w-36"
+                value={abnormalFilters.processed}
+                onChange={(e) => setAbnormalFilters({ ...abnormalFilters, processed: e.target.value as any })}
+              >
+                <option value="all">全部处理状态</option>
+                <option value="pending">未处理</option>
+                <option value="processed">已处理</option>
+              </select>
+              <div className="flex-1" />
+              <div className="text-sm text-slate-500">
+                共 <span className="font-medium text-slate-900">{filteredAbnormalRecords.length}</span> 条异常记录
               </div>
             </div>
-          ))}
+          </div>
+        )}
 
-          {filteredTasks.length === 0 && (
-            <div className="py-12 text-center text-slate-500">
-              暂无盘点任务
-            </div>
-          )}
-        </div>
+        {activeTab !== 'abnormal' ? (
+          <div className="divide-y divide-slate-100">
+            {filteredTasks.map((task) => (
+              <div key={task.id} className="p-5 hover:bg-slate-50 transition-colors">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-3">
+                      <h3 className="font-medium text-slate-900">{task.name}</h3>
+                      {getStatusBadge(task.status)}
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-4 mb-3">
+                      <div>
+                        <p className="text-xs text-slate-500 mb-1">盘点资产数</p>
+                        <p className="text-lg font-semibold text-slate-900">{task.totalAssets}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-slate-500 mb-1">已盘点</p>
+                        <p className="text-lg font-semibold text-primary-600">{task.checkedAssets}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-slate-500 mb-1">盘盈</p>
+                        <p className="text-lg font-semibold text-success-600">{task.profitAssets}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-slate-500 mb-1">盘亏</p>
+                        <p className="text-lg font-semibold text-danger-600">{task.lossAssets}</p>
+                      </div>
+                    </div>
+
+                    {task.status === 'in_progress' && task.totalAssets > 0 && (
+                      <div className="mb-3">
+                        <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+                          <span>盘点进度</span>
+                          <span>{Math.round((task.checkedAssets / task.totalAssets) * 100)}%</span>
+                        </div>
+                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-primary-500 rounded-full transition-all"
+                            style={{ width: `${(task.checkedAssets / task.totalAssets) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-6 text-xs text-slate-500">
+                      <div className="flex items-center gap-1.5">
+                        <User className="w-3.5 h-3.5" />
+                        <span>创建人：{task.creator}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5" />
+                        <span>开始：{task.startDate}</span>
+                      </div>
+                      {task.endDate && (
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>完成：{task.endDate}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1.5">
+                        <Building2 className="w-3.5 h-3.5" />
+                        <span>涉及 {task.departmentIds.length} 个部门</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {task.status === 'pending' && (
+                      <button
+                        className="btn-primary text-xs py-1.5 px-3"
+                        onClick={() => handleStartTask(task.id)}
+                      >
+                        <Play className="w-3 h-3 mr-1" />
+                        开始
+                      </button>
+                    )}
+                    {task.status === 'in_progress' && (
+                      <>
+                        <button
+                          className="btn-ghost text-xs py-1.5 px-3"
+                          onClick={() => {
+                            setSelectedTask(task);
+                            setShowScanModal(true);
+                          }}
+                        >
+                          <Scan className="w-3 h-3 mr-1" />
+                          扫码盘点
+                        </button>
+                        <button
+                          className="btn-success text-xs py-1.5 px-3"
+                          onClick={() => handleCompleteTask(task.id)}
+                        >
+                          <CheckCircle className="w-3 h-3 mr-1" />
+                          完成
+                        </button>
+                      </>
+                    )}
+                    {task.status === 'completed' && (
+                      <button
+                        className="btn-secondary text-xs py-1.5 px-3"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleExportReport(task);
+                        }}
+                      >
+                        <Download className="w-3 h-3 mr-1" />
+                        导出报告
+                      </button>
+                    )}
+                    <button
+                      className="btn-ghost text-xs py-1.5 px-3"
+                      onClick={() => handleViewDetail(task)}
+                    >
+                      <Eye className="w-3 h-3 mr-1" />
+                      详情
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {filteredTasks.length === 0 && (
+              <div className="py-12 text-center text-slate-500">
+                暂无盘点任务
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="table-header">盘点任务</th>
+                  <th className="table-header">资产编号</th>
+                  <th className="table-header">资产名称</th>
+                  <th className="table-header">异常类型</th>
+                  <th className="table-header">处理状态</th>
+                  <th className="table-header">盘点人</th>
+                  <th className="table-header">盘点时间</th>
+                  <th className="table-header">备注</th>
+                  <th className="table-header text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredAbnormalRecords.map((record) => (
+                  <tr key={record.id} className="table-row">
+                    <td className="table-cell">
+                      <span className="text-sm text-slate-900">{record.taskName}</span>
+                    </td>
+                    <td className="table-cell">
+                      <span className="text-sm font-mono text-slate-900">{record.assetNo}</span>
+                    </td>
+                    <td className="table-cell">
+                      <span className="text-sm text-slate-900">{record.assetName}</span>
+                    </td>
+                    <td className="table-cell">
+                      {getRecordStatusBadge(record.status)}
+                    </td>
+                    <td className="table-cell">
+                      {record.processed ? (
+                        <span className="badge bg-success-100 text-success-700 flex items-center gap-1 w-fit">
+                          <Check className="w-3 h-3" />
+                          已处理
+                        </span>
+                      ) : (
+                        <span className="badge bg-warning-100 text-warning-700 flex items-center gap-1 w-fit">
+                          <AlertTriangle className="w-3 h-3" />
+                          未处理
+                        </span>
+                      )}
+                    </td>
+                    <td className="table-cell">
+                      <span className="text-sm text-slate-600">{record.checkedBy}</span>
+                    </td>
+                    <td className="table-cell">
+                      <span className="text-sm text-slate-600">{formatDateTime(record.checkedAt)}</span>
+                    </td>
+                    <td className="table-cell">
+                      <span className="text-sm text-slate-600">{record.remark || '-'}</span>
+                    </td>
+                    <td className="table-cell text-right">
+                      {!record.processed && (
+                        <div className="flex items-center justify-end gap-2">
+                          {record.status === 'profit' && (
+                            <>
+                              <button
+                                className="text-xs text-primary-600 hover:text-primary-700"
+                                onClick={() => {
+                                  const task = inventoryTasks.find((t) => t.id === record.taskId);
+                                  setSelectedTask(task || null);
+                                  setSelectedRecord(record);
+                                  setProfitForm({
+                                    name: record.assetName,
+                                    category: 'other',
+                                    value: 0,
+                                    departmentId: 'dept_001',
+                                    location: '',
+                                    description: record.remark || '',
+                                  });
+                                  setShowProfitModal(true);
+                                }}
+                              >
+                                补录资产
+                              </button>
+                              <button
+                                className="text-xs text-slate-500 hover:text-slate-700"
+                                onClick={() => {
+                                  if (confirm('确认标记为忽略吗？')) {
+                                    processInventoryProfit(record.taskId, record.id, 'ignore');
+                                  }
+                                }}
+                              >
+                                忽略
+                              </button>
+                            </>
+                          )}
+                          {record.status === 'loss' && (
+                            <button
+                              className="text-xs text-danger-600 hover:text-danger-700"
+                              onClick={() => {
+                                const task = inventoryTasks.find((t) => t.id === record.taskId);
+                                setSelectedTask(task || null);
+                                setSelectedRecord(record);
+                                setShowLossModal(true);
+                              }}
+                            >
+                              确认盘亏
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {record.processed && (
+                        <span className="text-xs text-slate-400">
+                          {record.processType === 'add_asset' && '已补录'}
+                          {record.processType === 'ignore' && '已忽略'}
+                          {record.processType === 'confirm_loss' && '已确认盘亏'}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {filteredAbnormalRecords.length === 0 && (
+              <div className="py-12 text-center text-slate-500">
+                暂无异常记录
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {showCreateModal && (

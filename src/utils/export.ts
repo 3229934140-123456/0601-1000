@@ -121,8 +121,27 @@ export function exportInventoryReport(
   records: InventoryRecord[],
   filename: string = '盘点报告.csv'
 ) {
-  const headers = [
-    '盘点任务',
+  const totalCount = records.length;
+  const normalCount = records.filter((r) => r.status === 'normal').length;
+  const profitCount = records.filter((r) => r.status === 'profit').length;
+  const lossCount = records.filter((r) => r.status === 'loss').length;
+  const processedCount = records.filter((r) => r.processed).length;
+  const pendingCount = records.filter((r) => !r.processed && (r.status === 'profit' || r.status === 'loss')).length;
+
+  const summaryRows = [
+    ['===== 盘点汇总 ====='],
+    ['盘点任务', taskName],
+    ['资产总数', totalCount],
+    ['正常', normalCount],
+    ['盘盈', profitCount],
+    ['盘亏', lossCount],
+    ['已处理', processedCount],
+    ['未处理', pendingCount],
+    ['导出时间', formatDateTime(new Date().toISOString())],
+    [''],
+  ];
+
+  const detailHeaders = [
     '资产编号',
     '资产名称',
     '盘点状态',
@@ -148,8 +167,7 @@ export function exportInventoryReport(
     confirm_loss: '确认盘亏',
   };
 
-  const rows = records.map((record) => [
-    taskName,
+  const detailRows = records.map((record) => [
     record.assetNo,
     record.assetName,
     statusMap[record.status] || record.status,
@@ -163,7 +181,14 @@ export function exportInventoryReport(
     record.processRemark || '',
   ]);
 
-  const csvContent = [headers, ...rows]
+  const allRows = [
+    ...summaryRows,
+    ['===== 盘点明细 ====='],
+    detailHeaders,
+    ...detailRows,
+  ];
+
+  const csvContent = allRows
     .map((row) => row.map(escapeCSV).join(','))
     .join('\n');
 

@@ -135,6 +135,84 @@ function saveData(state: Partial<AssetState>) {
   });
 }
 
+function generateInventoryRecordsForTask(task: InventoryTask): InventoryRecord[] {
+  const records: InventoryRecord[] = [];
+  const total = task.totalAssets || 20;
+  const profitCount = task.profitAssets || 0;
+  const lossCount = task.lossAssets || 0;
+  const normalCount = Math.max(0, total - profitCount - lossCount);
+  
+  const assetNames = [
+    '办公电脑', '笔记本电脑', '显示器', '打印机', '办公椅', '办公桌',
+    '投影仪', '扫描仪', '碎纸机', '电话机', '文件柜', '空调',
+    '微波炉', '冰箱', '饮水机', '会议白板', '音响', '摄像头',
+    '路由器', '交换机', '键盘', '鼠标', '耳机', '平板电脑',
+    '计算器', '订书机', '保险柜', '电风扇', '空气净化器', '加湿器',
+  ];
+  
+  const departments = ['综合管理部', '财务部', '技术部', '市场部', '人力资源部'];
+  const categories: Array<{ code: string; name: string }> = [
+    { code: 'IT', name: '办公设备' },
+    { code: 'FN', name: '办公家具' },
+    { code: 'EL', name: '电子设备' },
+    { code: 'VH', name: '车辆资产' },
+  ];
+  
+  const year = task.startDate ? task.startDate.substring(0, 4) : '2024';
+  
+  for (let i = 0; i < normalCount; i++) {
+    const cat = categories[i % categories.length];
+    const seq = String(i + 1).padStart(4, '0');
+    records.push({
+      id: `ir_${task.id}_${String(i + 1).padStart(3, '0')}`,
+      taskId: task.id,
+      assetId: `asset_${task.id}_${String(i + 1).padStart(3, '0')}`,
+      assetName: assetNames[i % assetNames.length],
+      assetNo: `BJT-${cat.code}-${year}-${seq}`,
+      status: 'normal',
+      checkedBy: task.creator || '管理员',
+      checkedAt: task.endDate || task.startDate || '',
+      remark: '',
+    });
+  }
+  
+  for (let i = 0; i < profitCount; i++) {
+    const idx = normalCount + i;
+    const cat = categories[idx % categories.length];
+    const seq = String(9000 + i + 1).padStart(4, '0');
+    records.push({
+      id: `ir_${task.id}_p${String(i + 1).padStart(3, '0')}`,
+      taskId: task.id,
+      assetId: `asset_profit_${task.id}_${String(i + 1).padStart(3, '0')}`,
+      assetName: `盘盈资产${i + 1}`,
+      assetNo: `BJT-${cat.code}-${year}-${seq}`,
+      status: 'profit',
+      checkedBy: task.creator || '管理员',
+      checkedAt: task.endDate || task.startDate || '',
+      remark: '盘点发现未登记资产',
+    });
+  }
+  
+  for (let i = 0; i < lossCount; i++) {
+    const idx = normalCount + profitCount + i;
+    const cat = categories[idx % categories.length];
+    const seq = String(normalCount + i + 1).padStart(4, '0');
+    records.push({
+      id: `ir_${task.id}_l${String(i + 1).padStart(3, '0')}`,
+      taskId: task.id,
+      assetId: `asset_loss_${task.id}_${String(i + 1).padStart(3, '0')}`,
+      assetName: `盘亏资产${i + 1}`,
+      assetNo: `BJT-${cat.code}-${year}-${seq}`,
+      status: 'loss',
+      checkedBy: task.creator || '管理员',
+      checkedAt: task.endDate || task.startDate || '',
+      remark: '现场未找到',
+    });
+  }
+  
+  return records;
+}
+
 const initialData = loadInitialData();
 
 export const useAssetStore = create<AssetState>((set, get) => ({
@@ -1026,7 +1104,28 @@ export const useAssetStore = create<AssetState>((set, get) => ({
   },
 
   getInventoryRecords: (taskId) => {
-    return get().inventoryRecords[taskId] || [];
+    const state = get();
+    const records = state.inventoryRecords[taskId];
+    
+    if (records && records.length > 0) {
+      return records;
+    }
+    
+    const task = state.inventoryTasks.find((t) => t.id === taskId);
+    if (!task) return [];
+    
+    const generatedRecords = generateInventoryRecordsForTask(task);
+    const newState = {
+      ...state,
+      inventoryRecords: {
+        ...state.inventoryRecords,
+        [taskId]: generatedRecords,
+      },
+    };
+    saveData(newState);
+    set(newState);
+    
+    return generatedRecords;
   },
 
   processInventoryProfit: (taskId, recordId, processType, assetData) => {
