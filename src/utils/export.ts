@@ -129,6 +129,11 @@ export function exportInventoryReport(
     '盘点人',
     '盘点时间',
     '备注',
+    '处理状态',
+    '处理方式',
+    '处理人',
+    '处理时间',
+    '处理备注',
   ];
 
   const statusMap: Record<string, string> = {
@@ -137,14 +142,25 @@ export function exportInventoryReport(
     loss: '盘亏',
   };
 
+  const processTypeMap: Record<string, string> = {
+    ignore: '忽略',
+    add_asset: '补录资产',
+    confirm_loss: '确认盘亏',
+  };
+
   const rows = records.map((record) => [
     taskName,
     record.assetNo,
     record.assetName,
     statusMap[record.status] || record.status,
-    record.checkedBy,
-    formatDateTime(record.checkedAt),
+    record.checkedBy || '',
+    record.checkedAt ? formatDateTime(record.checkedAt) : '',
     record.remark || '',
+    record.processed ? '已处理' : '未处理',
+    record.processType ? (processTypeMap[record.processType] || record.processType) : '',
+    record.processedBy || '',
+    record.processedAt ? formatDateTime(record.processedAt) : '',
+    record.processRemark || '',
   ]);
 
   const csvContent = [headers, ...rows]

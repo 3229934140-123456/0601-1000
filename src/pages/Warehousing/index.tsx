@@ -35,6 +35,9 @@ interface ImportRecord {
   usefulLife: number;
   _status: string;
   _error: string;
+  _rowNum: number;
+  _rawCategory: string;
+  _rawDepartment: string;
 }
 
 export default function Warehousing() {
@@ -61,7 +64,7 @@ export default function Warehousing() {
   const [vouchers, setVouchers] = useState<PurchaseVoucher[]>([]);
   const [importPreview, setImportPreview] = useState<ImportRecord[]>([]);
   const [importStep, setImportStep] = useState<'upload' | 'preview' | 'result'>('upload');
-  const [importResult, setImportResult] = useState({ success: 0, failed: 0, total: 0, errors: [] as string[] });
+  const [importResult, setImportResult] = useState({ success: 0, failed: 0, total: 0, errors: [] as string[], failedRecords: [] as ImportRecord[] });
   const [newAssetId, setNewAssetId] = useState<string | null>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -172,6 +175,9 @@ export default function Warehousing() {
         usefulLife: 5,
         _status: '正常',
         _error: '',
+        _rowNum: i + 1,
+        _rawCategory: '',
+        _rawDepartment: '',
       };
 
       headers.forEach((header, index) => {
@@ -184,6 +190,7 @@ export default function Warehousing() {
           case '分类':
           case '资产分类':
           case 'category':
+            record._rawCategory = value;
             const catMap: Record<string, string> = {
               '办公设备': 'computer',
               '计算机': 'computer',
@@ -224,8 +231,14 @@ export default function Warehousing() {
           case '部门':
           case '所属部门':
           case 'department':
+            record._rawDepartment = value;
             const dept = departments.find((d) => d.name === value);
-            record.departmentId = dept?.id || '';
+            if (dept) {
+              record.departmentId = dept.id;
+            } else if (value) {
+              record._status = '错误';
+              record._error = `不认识的部门：${value}，请使用正确的部门名称`;
+            }
             break;
           case '位置':
           case '存放位置':
@@ -267,9 +280,10 @@ export default function Warehousing() {
   };
 
   const handleConfirmImport = () => {
-    const validRecords = importPreview.filter((r) => r._status === '正常');
-    const errors = importPreview.filter((r) => r._status === '错误').map((r, i) => `第${i + 1}行：${r._error}`);
+    const errorRecords = importPreview.filter((r) => r._status === '错误');
+    const errors = errorRecords.map((r) => `第${r._rowNum}行：${r._error}`);
 
+    const validRecords = importPreview.filter((r) => r._status === '正常');
     const assetsToImport = validRecords.map((r) => ({
       name: r.name,
       category: r.category as AssetCategory,
@@ -292,6 +306,7 @@ export default function Warehousing() {
       failed: result.failed + errors.length,
       total: importPreview.length,
       errors: [...errors, ...result.errors],
+      failedRecords: [...errorRecords],
     });
     setImportStep('result');
   };
@@ -720,32 +735,33 @@ export default function Warehousing() {
                   <table className="w-full">
                     <thead className="sticky top-0 bg-slate-50">
                         <tr>
-                          <th className="table-header text-xs">序号</th>
+                          <th className="table-header text-xs w-12">行号</th>
                           <th className="table-header text-xs">资产名称</th>
                           <th className="table-header text-xs">分类</th>
                           <th className="table-header text-xs">价值</th>
                           <th className="table-header text-xs">购置日期</th>
                           <th className="table-header text-xs">所属部门</th>
                           <th className="table-header text-xs">存放位置</th>
-                          <th className="table-header text-xs">校验状态</th>
+                          <th className="table-header text-xs w-20">校验状态</th>
+                          <th className="table-header text-xs">错误原因</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {importPreview.map((item, index) => (
-                          <tr key={index} className="table-row">
-                            <td className="table-cell text-xs">{index + 1}</td>
+                        {importPreview.map((item) => (
+                          <tr key={item._rowNum} className={`table-row ${item._status === '错误' ? 'bg-danger-50' : ''}`}>
+                            <td className="table-cell text-xs">{item._rowNum}</td>
                             <td className="table-cell text-xs">{item.name}</td>
                             <td className="table-cell text-xs">
                               {
                                 categoryMap[item.category as keyof typeof categoryMap]
-                                  ?.label || item.category
+                                  ?.label || item._rawCategory || item.category
                               }
                             </td>
                             <td className="table-cell text-xs">{formatCurrency(item.value)}</td>
                             <td className="table-cell text-xs">{formatDate(item.purchaseDate)}</td>
                             <td className="table-cell text-xs">
                               {departments.find((d) => d.id === item.departmentId)?.name ||
-                                '未指定'}
+                                item._rawDepartment || '未指定'}
                             </td>
                             <td className="table-cell text-xs">{item.location || '-'}</td>
                             <td className="table-cell text-xs">
@@ -755,12 +771,14 @@ export default function Warehousing() {
                                   正常
                                 </span>
                               ) : (
-                                <span
-                                  className="inline-flex items-center gap-1 text-danger-600" title={item._error}>
+                                <span className="inline-flex items-center gap-1 text-danger-600">
                                   <AlertCircle className="w-3 h-3" />
                                   错误
                                 </span>
                               )}
+                            </td>
+                            <td className="table-cell text-xs text-danger-600 max-w-xs">
+                              {item._error || '-'}
                             </td>
                           </tr>
                         ))}
@@ -826,15 +844,27 @@ export default function Warehousing() {
                     <button
                       className="btn-secondary"
                       onClick={() => {
-                        if (importResult.errors.length > 0) {
-                          const content = importResult.errors.join('\n');
-                          const blob = new Blob(['\uFEFF' + content], {
-                            type: 'text/plain;charset=utf-8;',
+                        if (importResult.failedRecords.length > 0) {
+                          const headers = ['行号', '资产名称', '原始分类', '原始部门', '错误原因'];
+                          const rows = importResult.failedRecords.map((r) => [
+                            r._rowNum,
+                            r.name,
+                            r._rawCategory || r.category,
+                            r._rawDepartment || r.departmentId,
+                            r._error,
+                          ]);
+                          const csvContent = [headers, ...rows]
+                            .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))
+                            .join('\n');
+                          
+                          const BOM = '\uFEFF';
+                          const blob = new Blob([BOM + csvContent], {
+                            type: 'text/csv;charset=utf-8;',
                           });
                           const url = URL.createObjectURL(blob);
                           const link = document.createElement('a');
                           link.href = url;
-                          link.download = '导入错误报告.txt';
+                          link.download = '导入错误报告.csv';
                           document.body.appendChild(link);
                           link.click();
                           document.body.removeChild(link);

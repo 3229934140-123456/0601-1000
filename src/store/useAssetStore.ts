@@ -15,7 +15,7 @@ import {
 import { initialAssets } from '@/data/assets';
 import { maintenanceOrders as initialMaintenanceOrders } from '@/data/maintenance';
 import { transferOrders as initialTransferOrders } from '@/data/transfers';
-import { inventoryTasks as initialInventoryTasks } from '@/inventory/inventory';
+import { inventoryTasks as initialInventoryTasks, generateInitialInventoryRecords } from '@/inventory/inventory';
 import { getStorage, setStorage } from '@/utils/storage';
 import { generateAssetNo, getNextSequence } from '@/utils/assetNo';
 import { generateId } from '@/utils/format';
@@ -117,7 +117,7 @@ function loadInitialData() {
     maintenanceOrders: initialMaintenanceOrders,
     transferOrders: initialTransferOrders,
     inventoryTasks: initialInventoryTasks,
-    inventoryRecords: {},
+    inventoryRecords: generateInitialInventoryRecords(),
     scrapOrders: [],
     assetLogs: {},
   };
@@ -1042,11 +1042,16 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     let newAssetId = '';
 
     if (processType === 'add_asset' && assetData) {
+      const category = (assetData.category as AssetCategory) || 'other';
+      const existingNos = state.assets.map((a) => a.assetNo);
+      const nextSeq = getNextSequence(existingNos, category);
+      const newAssetNo = generateAssetNo(category, nextSeq);
+
       const newAsset: Asset = {
         id: `asset_${generateId()}`,
-        assetNo: assetData.assetNo || record.assetNo,
+        assetNo: newAssetNo,
         name: assetData.name || record.assetName,
-        category: (assetData.category as AssetCategory) || 'other',
+        category,
         status: 'idle',
         value: assetData.value || 0,
         purchaseDate: assetData.purchaseDate || now.split('T')[0],
@@ -1072,7 +1077,7 @@ export const useAssetStore = create<AssetState>((set, get) => ({
           operator: '张明',
           operatorId: 'user_001',
           createdAt: now,
-          remark: `盘点任务盘盈补录，原资产编号：${record.assetNo}`,
+          remark: `盘点任务盘盈补录，原盘点编号：${record.assetNo}，新资产编号：${newAssetNo}`,
         },
       ];
     }

@@ -533,7 +533,7 @@ export default function Inventory() {
             </div>
 
             <div className="p-6 border-b border-slate-200">
-              <div className="grid grid-cols-4 gap-4">
+              <div className="grid grid-cols-5 gap-4">
                 <div className="text-center p-3 bg-slate-50 rounded-lg">
                   <p className="text-2xl font-bold text-slate-900">{records.length}</p>
                   <p className="text-xs text-slate-500">总计</p>
@@ -545,10 +545,22 @@ export default function Inventory() {
                 <div className="text-center p-3 bg-primary-50 rounded-lg">
                   <p className="text-2xl font-bold text-primary-600">{profitCount}</p>
                   <p className="text-xs text-slate-500">盘盈</p>
+                  <p className="text-xs text-primary-500 mt-0.5">
+                    未处理 {records.filter(r => r.status === 'profit' && !r.processed).length} / 已处理 {records.filter(r => r.status === 'profit' && r.processed).length}
+                  </p>
                 </div>
                 <div className="text-center p-3 bg-danger-50 rounded-lg">
                   <p className="text-2xl font-bold text-danger-600">{lossCount}</p>
                   <p className="text-xs text-slate-500">盘亏</p>
+                  <p className="text-xs text-danger-500 mt-0.5">
+                    未处理 {records.filter(r => r.status === 'loss' && !r.processed).length} / 已处理 {records.filter(r => r.status === 'loss' && r.processed).length}
+                  </p>
+                </div>
+                <div className="text-center p-3 bg-warning-50 rounded-lg">
+                  <p className="text-2xl font-bold text-warning-600">
+                    {records.filter(r => r.status !== 'normal' && !r.processed).length}
+                  </p>
+                  <p className="text-xs text-slate-500">待处理</p>
                 </div>
               </div>
             </div>
